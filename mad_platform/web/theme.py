@@ -127,10 +127,11 @@ h2 { font-family: "Newsreader", Georgia, serif; font-weight: 600; font-size: 21p
 }
 .how-step h3 { font-size: 16px; margin: 0; }
 .how-arrow { align-self: center; color: var(--border-strong); font-size: 22px; margin-top: 70px; }
-@media (max-width: 760px) { .how-arrow { display: none; } .stats-grid { grid-template-columns: 1fr; } }
+@media (max-width: 760px) { .how-arrow { display: none; } }
 
 /* why it matters: charts */
 .stats-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 24px; align-items: stretch; margin-bottom: 40px; }
+@media (max-width: 760px) { .stats-grid { grid-template-columns: 1fr; } }
 .stat-panel {
   text-align: center; background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
   box-shadow: var(--shadow); padding: 28px 20px;
