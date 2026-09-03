@@ -144,10 +144,13 @@ def _render_form(error: str | None = None) -> str:
     <div class="hero-copy">
       <span class="hero-eyebrow"><span class="dot-b"></span>Community Edition &middot; free &middot; no account needed</span>
       <h1>Know what's exposed, before a demand letter tells you.</h1>
-      <div class="hero-mad"><b>MAD</b> stands for Multi-Agent Defense, built to catch what a lawsuit would catch, first.</div>
-      <p class="hero-lede">"That's not a statistic, it's most of the internet simply not working."
-      96% of the web's most visited sites fail basic accessibility tests. This scans yours, verifies
-      what it finds, and hands you a real fix, not just a list of problems.</p>
+      <div class="mad-lockup">
+        <span class="hl">M</span>ulti-<span class="hl">A</span>gent <span class="hl">D</span>efense <span class="hl">Platform</span>
+        <span class="sub">for digital accessibility compliance</span>
+      </div>
+      <p class="hero-lede">96% of the web's most visited sites fail basic accessibility tests.
+      That's not a statistic, it's most of the internet simply not working. This scans yours,
+      verifies what it finds, and hands you a real fix, not just a list of problems.</p>
       <div class="stat-row">
         <div class="stat"><b>5,000+</b><span>accessibility lawsuits filed in the US every year</span></div>
         <div class="stat"><b>10&times;</b><span>more demand letters go out for every one that reaches court</span></div>
@@ -539,6 +542,13 @@ async def faq_page() -> str:
 
         <div class="trust-section-label">What it does and doesn't do</div>
         <ol class="trust-list" style="counter-reset: trust-item 3">
+          <li><h3>Why is it called MAD Platform?</h3>
+            <p>MAD is short for Multi-Agent Defense Platform. Multi-agent because it's genuinely
+            a team of specialized AI agents working together, one decides what to check, one
+            finds issues, one independently verifies them, one takes action, not a single model
+            doing everything at once. Defense because that's the actual job: catching gaps
+            before they become a legal problem, not just reporting on them after the fact.</p></li>
+
           <li><h3>What is WCAG?</h3>
             <p>The Web Content Accessibility Guidelines, the standard most digital
             accessibility laws and lawsuits point back to. This tool checks your site against

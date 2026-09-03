@@ -117,11 +117,9 @@ h2 { font-family: "Newsreader", Georgia, serif; font-weight: 600; font-size: 21p
   box-shadow: 0 20px 50px -12px rgba(11,110,102,0.28), var(--shadow);
   transform: rotate(1.2deg);
 }
-.hero-mad {
-  font-family: "JetBrains Mono", monospace; font-size: 12px; color: var(--muted);
-  margin: -6px 0 22px;
-}
-.hero-mad b { color: var(--brand-dark); }
+.mad-lockup { font-size: 15px; color: var(--ink-soft); margin: -4px 0 24px; }
+.mad-lockup .hl { color: var(--brand-dark); font-weight: 800; }
+.mad-lockup .sub { display: block; font-size: 12px; color: var(--muted); margin-top: 2px; }
 @media (max-width: 860px) { .hero-split { grid-template-columns: 1fr; } .hero-shot img { transform: none; } }
 .hero-eyebrow {
   display: inline-flex; align-items: center; gap: 7px; font-family: "JetBrains Mono", monospace;
