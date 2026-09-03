@@ -142,7 +142,7 @@ def _render_form(error: str | None = None) -> str:
 <div class="ribbon"><p>Know what's exposed, before a demand letter tells you.</p></div>
 
 <div class="scan-section" id="scan">
-  <div class="card">
+  <div class="card glass-sheen">
     <div class="scan-card-head">
       <h1>Scan your site</h1>
       <span class="hero-eyebrow"><span class="dot-b"></span><span class="hero-eyebrow-text">Community Edition &middot; free &middot; no account needed</span></span>
@@ -171,12 +171,12 @@ def _render_form(error: str | None = None) -> str:
   </div>
   <div class="how-visual">
     <div class="how-step">
-      <div class="shot-frame"><span class="step-badge">1</span><img src="/static/how-step1.png" alt="The scan form: enter your website URL and email"></div>
+      <div class="shot-frame glass-sheen"><span class="step-badge">1</span><img src="/static/how-step1.png" alt="The scan form: enter your website URL and email"></div>
       <h3>Enter your site</h3>
     </div>
     <div class="how-arrow">&rarr;</div>
     <div class="how-step">
-      <div class="shot-frame"><span class="step-badge">2</span><img src="/static/hero-dashboard.png" alt="A completed scan report: site score, severity breakdown, and a chart of issues by WCAG principle"></div>
+      <div class="shot-frame glass-sheen"><span class="step-badge">2</span><img src="/static/hero-dashboard.png" alt="A completed scan report: site score, severity breakdown, and a chart of issues by WCAG principle"></div>
       <h3>See your report</h3>
     </div>
   </div>
@@ -188,7 +188,7 @@ def _render_form(error: str | None = None) -> str:
     <p>The real numbers behind the risk, not marketing copy.</p>
   </div>
   <div class="stats-grid">
-    <div class="stat-panel">
+    <div class="stat-panel glass-sheen">
       <div class="panel-label">Sites that fail</div>
       <div class="pie-figure">
         <svg width="140" height="140" viewBox="0 0 140 140" role="img" aria-label="96 percent of sites fail basic accessibility tests">
@@ -201,7 +201,7 @@ def _render_form(error: str | None = None) -> str:
         <p class="pie-caption">96% of the web's most visited sites fail basic accessibility tests</p>
       </div>
     </div>
-    <div class="stat-panel">
+    <div class="stat-panel glass-sheen">
       <div class="panel-label">Website lawsuits, federal court</div>
       <div class="bar-figure">
         <div class="bar-col"><span class="bar-val">2,452</span><div class="bar" style="height:78px;background:var(--border-strong)"></div><span class="bar-lbl">2024</span></div>
@@ -209,7 +209,7 @@ def _render_form(error: str | None = None) -> str:
       </div>
       <p class="pie-caption">Website-specific accessibility lawsuits grew 27% in one year</p>
     </div>
-    <div class="stat-panel">
+    <div class="stat-panel glass-sheen">
       <div class="panel-label">Cost to find out</div>
       <div class="bignum-figure">
         <div class="bn bad"><b>$10,000</b><span>avg. small-business settlement</span></div>
@@ -247,7 +247,7 @@ __FONT_LINK__
     site may be unusually heavy, or something may need attention. Feel free to keep
     waiting, or come back and check this page later.
   </div>
-  <div class="card" id="content">
+  <div class="card glass-sheen" id="content">
     <span class="spinner"></span> Starting...
   </div>
 </div>
@@ -460,7 +460,7 @@ def _static_page(title: str, body_html: str, active: str = "") -> str:
 {_site_header(active)}
 <div class="page with-site-header">
   <h1>{title}</h1>
-  <div class="card" style="line-height:1.6">{body_html}</div>
+  <div class="card glass-sheen" style="line-height:1.6">{body_html}</div>
 </div>
 {_site_footer()}
 </body>
@@ -748,7 +748,7 @@ def _render_review_login(error: str | None = None) -> str:
   <div class="brand"><span class="dot-b"></span>MAD Platform</div>
   <h1>Internal review queue</h1>
   <div class="tagline">Not for customer access. Authorized reviewers only.</div>
-  <div class="card">
+  <div class="card glass-sheen">
     <form action="/review/login" method="post">
       <label class="f-label" for="rcode">Review code</label>
       <input id="rcode" type="password" name="code" required autofocus autocomplete="off">
@@ -811,7 +811,7 @@ def _render_review_list(pending: list[dict]) -> str:
   <div class="brand"><span class="dot-b"></span>MAD Platform</div>
   <h1>Internal review queue</h1>
   <div class="tagline">{len(pending)} item(s) awaiting disposition.</div>
-  <div class="card">{items_html}</div>
+  <div class="card glass-sheen">{items_html}</div>
 </div>
 </body>
 </html>"""
@@ -882,7 +882,7 @@ def _render_review_detail(e: dict, message: str | None = None) -> str:
 <div class="page">
   <div class="brand"><a href="/review" style="color:inherit;text-decoration:none"><span class="dot-b"></span>MAD Platform · Review Queue</a></div>
   <h1>Review item</h1>
-  <div class="card">
+  <div class="card glass-sheen">
     {body}
     <div style="margin-top:20px">{actions}</div>
   </div>
@@ -979,7 +979,7 @@ def _render_scoped_review_list(job_id: str, token: str, pending: list[dict]) -> 
   <div class="brand"><span class="dot-b"></span>MAD Platform</div>
   <h1>Your review queue</h1>
   <div class="tagline">Findings from your scan that need a quick judgment call -- only you can see this.</div>
-  <div class="card">{items_html}</div>
+  <div class="card glass-sheen">{items_html}</div>
 </div>
 </body>
 </html>"""
@@ -1022,7 +1022,7 @@ def _render_scoped_review_detail(job_id: str, token: str, e: dict, message: str 
 <div class="page">
   <div class="brand"><a href="/review/link/{job_id}/{token}" style="color:inherit;text-decoration:none"><span class="dot-b"></span>MAD Platform · Your Review Queue</a></div>
   <h1>Review item</h1>
-  <div class="card">
+  <div class="card glass-sheen">
     {body}
     <div style="margin-top:20px">{actions}</div>
   </div>
