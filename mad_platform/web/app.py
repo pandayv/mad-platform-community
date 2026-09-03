@@ -144,6 +144,7 @@ def _render_form(error: str | None = None) -> str:
 <style>{_BASE_STYLE}</style>
 </head>
 <body>
+<div class="scan-beam" aria-hidden="true"></div>
 {_site_header("/", show_cta=False)}
 
 <section class="view">
@@ -154,7 +155,7 @@ def _render_form(error: str | None = None) -> str:
   </div>
 
   <div class="scan-section" id="scan">
-    <form class="scan-form glass-sheen" action="/scan" method="post" aria-label="Scan your website for accessibility issues">
+    <form class="scan-form" action="/scan" method="post" aria-label="Scan your website for accessibility issues">
       <div class="scan-field">
         <label class="sr-only" for="url">Website URL</label>
         <input id="url" type="url" name="url" placeholder="Enter your website URL" required autofocus>

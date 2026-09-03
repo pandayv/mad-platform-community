@@ -84,6 +84,22 @@ body {
   background: linear-gradient(135deg, var(--glass-sheen), transparent 45%);
   opacity: 0.5; pointer-events: none;
 }
+/* A slow, continuous sweep down the homepage -- a literal nod to what the
+   product actually does, not decoration for its own sake. mix-blend-mode
+   makes it genuinely tint whatever it crosses (page background, cards,
+   text) rather than just sit on top of it, so "color shifts as it passes"
+   is real, not simulated per-element. Fixed to the viewport (not the
+   document) so it reads the same regardless of scroll position or how
+   tall the page is. Off entirely under reduced-motion. */
+.scan-beam {
+  position: fixed; left: 0; right: 0; top: -160px; height: 160px; z-index: 30;
+  pointer-events: none; mix-blend-mode: overlay;
+  background: linear-gradient(180deg, transparent, rgba(11,110,102,0.5) 42%, rgba(94,132,255,0.4) 58%, transparent);
+  animation: scan-beam-sweep 13s ease-in-out infinite;
+}
+@keyframes scan-beam-sweep { 0%, 100% { top: -160px; } 50% { top: 100vh; } }
+@media (prefers-reduced-motion: reduce) { .scan-beam { display: none; } }
+
 .mono, code { font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace; }
 a { color: var(--brand-dark); }
 :focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; border-radius: 3px; }
@@ -158,29 +174,32 @@ h2 { font-family: "Newsreader", Georgia, serif; font-weight: 600; font-size: 21p
 .hero-tagline { font-family: "Newsreader", Georgia, serif; font-weight: 500; font-size: 20px; color: var(--ink-soft); margin: 0; }
 
 .scan-section { max-width: 460px; margin: 0 auto; padding: 0 24px 8px; }
-.scan-form {
-  display: flex; flex-direction: column; gap: 12px;
-  background: var(--glass-strong); border: 1px solid var(--glass-border); border-radius: 20px;
-  padding: 22px; box-shadow: var(--glass-shadow);
-  backdrop-filter: blur(28px) saturate(160%); -webkit-backdrop-filter: blur(28px) saturate(160%);
-}
+.scan-form { display: flex; flex-direction: column; gap: 12px; }
 .scan-field { position: relative; }
 /* Compound selector (class + element + attribute) so this reliably beats
    the older global input[type=url] rule later in this file regardless of
    source order -- that equal-specificity, later-wins conflict is exactly
    why the URL field used to have a visible box and the email field next
-   to it didn't (email isn't type=url, so it never matched that rule). */
+   to it didn't (email isn't type=url, so it never matched that rule).
+   Each field carries its own glass surface now -- no outer card wraps
+   them, so the fields read as the page's only "boxed" elements, closer
+   to how a search bar sits bare on its own page. */
 .scan-field input[type=url], .scan-field input[type=email] {
   display: block; width: 100%; box-sizing: border-box; margin: 0;
-  border: 1px solid var(--border-strong); background: var(--surface); color: var(--ink);
+  border: 1px solid var(--glass-border); background: var(--glass-strong); color: var(--ink);
   border-radius: 12px; padding: 13px 16px; font-size: 15.5px; font-family: inherit;
+  box-shadow: var(--glass-shadow);
+  backdrop-filter: blur(20px) saturate(160%); -webkit-backdrop-filter: blur(20px) saturate(160%);
 }
 .scan-field input::placeholder { color: var(--muted); }
 .scan-field input:focus { outline: none; border-color: var(--brand); box-shadow: 0 0 0 3px var(--brand-tint); }
 .scan-field:has(.info-tip) input[type=email] { padding-right: 44px; }
 .scan-field .info-tip { position: absolute; right: 13px; top: 50%; transform: translateY(-50%); }
-.scan-submit { width: 100%; justify-content: center; border-radius: 12px !important; padding: 13px 18px !important; margin-top: 2px; }
-@media (max-width: 640px) { .hero-title { font-size: 38px; } }
+.scan-submit {
+  align-self: flex-end; justify-content: center; font-size: 14px;
+  border-radius: 10px !important; padding: 10px 20px !important; margin-top: 2px;
+}
+@media (max-width: 640px) { .hero-title { font-size: 38px; } .scan-submit { align-self: stretch; } }
 
 /* tooltip: replaces a permanently-visible sentence of fine print next to
    the email field. Shows on hover AND focus (not hover-only) so it's
