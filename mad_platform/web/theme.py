@@ -100,7 +100,11 @@ a { color: var(--brand-dark); }
    scrolling into place, never fight or disorient it. */
 .view { min-height: calc(100vh - 65px); display: flex; flex-direction: column; justify-content: center; }
 @media (prefers-reduced-motion: no-preference) {
-  html { scroll-snap-type: y proximity; }
+  /* scroll-padding-top keeps a snapped section's top edge clear of the
+     sticky header instead of sliding underneath it -- the header is ~65px
+     on one line, ~95px when the nav wraps to two on a narrow phone; 100px
+     covers both with a little room rather than clipping content again. */
+  html { scroll-snap-type: y proximity; scroll-padding-top: 100px; }
   .view { scroll-snap-align: start; }
 }
 
@@ -167,9 +171,9 @@ h2 { font-family: "Newsreader", Georgia, serif; font-weight: 600; font-size: 21p
   color: var(--ink); outline: none; margin: 0; border-radius: 0; width: auto;
 }
 .scan-bar input::placeholder { color: var(--muted); }
-.scan-bar-url { flex: 1 1 auto; min-width: 0; }
+.scan-bar-url { flex: 3 1 200px; min-width: 140px; }
 .scan-bar-email-wrap {
-  display: flex; align-items: center; flex: 0 1 220px; min-width: 0;
+  display: flex; align-items: center; flex: 1 1 160px; min-width: 150px;
   border-left: 1px solid var(--glass-border); padding-left: 16px;
 }
 .scan-bar-email { flex: 1 1 auto; min-width: 0; }
@@ -178,6 +182,13 @@ h2 { font-family: "Newsreader", Georgia, serif; font-weight: 600; font-size: 21p
   .hero-title { font-size: 38px; }
   .scan-bar { flex-direction: column; align-items: stretch; border-radius: 22px; padding: 16px; gap: 2px; }
   .scan-bar input { padding: 10px 2px; }
+  /* Stacking .scan-bar into a column flips its main axis to vertical, so
+     the desktop rules' flex-basis values (200px/160px, meant as target
+     *widths*) become target *heights* instead -- the email wrapper was
+     rendering 220px tall because of exactly this. Reset both to natural
+     content-driven sizing now that the row's width-splitting logic no
+     longer applies. */
+  .scan-bar-url, .scan-bar-email-wrap { flex: 0 0 auto; min-width: 0; }
   .scan-bar-email-wrap { border-left: none; border-top: 1px solid var(--glass-border); padding-left: 2px; padding-top: 12px; margin-top: 6px; }
   .scan-bar-btn { width: 100%; justify-content: center; margin-top: 10px; }
 }
