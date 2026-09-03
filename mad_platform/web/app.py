@@ -215,9 +215,10 @@ def _render_form(error: str | None = None) -> str:
       </div>
     </div>
     <div class="stat-panel">
+      <div class="bar-growth">&uarr; 23% year-over-year</div>
       <div class="bar-figure">
-        <div class="bar-col"><span class="bar-val" data-val="4000">4,000</span><div class="bar" data-h="122" style="height:122px;background:var(--border-strong)"></div><span class="bar-lbl">2024</span></div>
-        <div class="bar-col"><span class="bar-val" data-val="4928">4,928</span><div class="bar" data-h="150" style="height:150px;background:var(--brand)"></div><span class="bar-lbl">2025</span></div>
+        <div class="bar-col"><span class="bar-val" data-val="4000">4,000</span><div class="bar" data-h="138" style="height:138px;background:var(--border-strong)"></div><span class="bar-lbl">2024</span></div>
+        <div class="bar-col"><span class="bar-val" data-val="4928">4,928</span><div class="bar" data-h="170" style="height:170px;background:var(--brand)"></div><span class="bar-lbl">2025</span></div>
       </div>
       <p class="pie-caption">Website accessibility lawsuits across federal and state courts grew 23% in one year, reaching nearly 5,000 in 2025 -- plus an estimated 7&ndash;10 demand letters for every one that actually reaches court.</p>
     </div>
@@ -554,7 +555,7 @@ def _static_page(title: str, body_html: str, active: str = "") -> str:
 {_site_header(active)}
 <div class="page with-site-header">
   <h1>{title}</h1>
-  <div class="card glass-sheen" style="line-height:1.6">{body_html}</div>
+  <div style="line-height:1.6">{body_html}</div>
 </div>
 {_site_footer()}
 </body>

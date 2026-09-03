@@ -236,7 +236,10 @@ h2 { font-family: "Newsreader", Georgia, serif; font-weight: 600; font-size: 21p
 }
 .info-tip:hover .tip-text, .info-tip:focus-within .tip-text { opacity: 1; transform: translateY(0); }
 
-.mad-lockup.centered { text-align: center; margin: 26px auto 0; }
+.mad-lockup.centered {
+  text-align: center; margin-top: 36px; padding-top: 22px;
+  border-top: 1px solid var(--glass-border);
+}
 
 .section { max-width: 980px; margin: 0 auto; padding: 56px 24px; }
 .section-head { text-align: center; margin-bottom: 56px; }
@@ -281,7 +284,18 @@ h2 { font-family: "Newsreader", Georgia, serif; font-weight: 600; font-size: 21p
    default paragraph text: bigger, darker, different margin -- exactly
    the "different font under each chart" the user was seeing. */
 .pie-caption { margin-top: 14px; font-size: 13.5px; color: var(--ink-soft); }
-.bar-figure { display: flex; align-items: flex-end; justify-content: center; gap: 32px; height: 168px; margin-bottom: 14px; }
+/* The real year-over-year change is 23% -- honest, zero-baselined bars
+   will always look fairly close in height at that gap, and exaggerating
+   it with a truncated axis would be exactly the misleading-chart trick
+   this site shouldn't use. The growth badge makes the difference explicit
+   via text instead of asking a ~20% height gap to read as "different" on
+   its own. */
+.bar-growth {
+  display: inline-flex; align-items: center; gap: 5px; margin-bottom: 14px; padding: 4px 11px;
+  font-family: "JetBrains Mono", monospace; font-size: 11px; font-weight: 700; letter-spacing: 0.02em;
+  color: var(--brand-dark); background: var(--brand-tint); border-radius: 999px;
+}
+.bar-figure { display: flex; align-items: flex-end; justify-content: center; gap: 32px; height: 190px; margin-bottom: 14px; }
 .bar-figure .bar-col { display: flex; flex-direction: column; align-items: center; justify-content: flex-end; height: 100%; }
 .bar-figure .bar { width: 48px; border-radius: 7px 7px 0 0; transition: height 0.2s linear; }
 .bar-figure .bar-val { font-family: "JetBrains Mono", monospace; font-size: 13.5px; font-weight: 700; margin-bottom: 6px; font-variant-numeric: tabular-nums; }
