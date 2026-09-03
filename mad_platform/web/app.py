@@ -173,8 +173,7 @@ def _render_form(error: str | None = None) -> str:
     </form>
     {error_html}
     <div class="mad-lockup centered">
-      <span class="lockup-line"><span class="hl">M</span>ulti-<span class="hl">A</span>gent <span class="hl">D</span>efense <span class="hl">Platform</span></span>
-      <span class="sub">for digital accessibility compliance</span>
+      <span class="hl">M</span>ulti-<span class="hl">A</span>gent <span class="hl">D</span>efense <span class="hl">Platform</span> <span class="sub">for digital accessibility compliance</span>
     </div>
   </div>
 </section>
@@ -217,10 +216,10 @@ def _render_form(error: str | None = None) -> str:
     </div>
     <div class="stat-panel">
       <div class="bar-figure">
-        <div class="bar-col"><span class="bar-val" data-val="2452">2,452</span><div class="bar" data-h="78" style="height:78px;background:var(--border-strong)"></div><span class="bar-lbl">2024</span></div>
-        <div class="bar-col"><span class="bar-val" data-val="3117">3,117</span><div class="bar" data-h="100" style="height:100px;background:var(--brand)"></div><span class="bar-lbl">2025</span></div>
+        <div class="bar-col"><span class="bar-val" data-val="4000">4,000</span><div class="bar" data-h="122" style="height:122px;background:var(--border-strong)"></div><span class="bar-lbl">2024</span></div>
+        <div class="bar-col"><span class="bar-val" data-val="4928">4,928</span><div class="bar" data-h="150" style="height:150px;background:var(--brand)"></div><span class="bar-lbl">2025</span></div>
       </div>
-      <p class="pie-caption">Federal lawsuits over website accessibility grew 27% in one year. Including state courts, nearly 5,000 were filed in 2025 alone.</p>
+      <p class="pie-caption">Website accessibility lawsuits across federal and state courts grew 23% in one year, reaching nearly 5,000 in 2025 -- plus an estimated 7&ndash;10 demand letters for every one that actually reaches court.</p>
     </div>
     <div class="stat-panel">
       <div class="bignum-figure">

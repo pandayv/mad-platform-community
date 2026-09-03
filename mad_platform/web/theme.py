@@ -40,10 +40,18 @@ THEME_CSS = """
   --glass: rgba(255,255,255,0.6); --glass-strong: rgba(255,255,255,0.78);
   --glass-border: rgba(255,255,255,0.7); --glass-sheen: rgba(255,255,255,0.85);
   --glass-shadow: 0 1px 1px rgba(255,255,255,0.5) inset, 0 12px 40px -8px rgba(9,30,28,0.18), 0 2px 10px rgba(9,30,28,0.07);
+  /* Sized in vmin, not px: fixed-pixel ellipses this large are ~85% of a
+     1280px-wide desktop viewport but nearly 3x a 390px-wide phone's width,
+     so the same background read as balanced multi-hue on desktop and
+     almost solid green on mobile -- same CSS, wildly different result
+     depending on aspect ratio. vmin scales with the smaller of the two
+     viewport dimensions, so the blobs keep the same relative footprint
+     (and balance against each other) on a narrow-tall phone and a
+     wide-short laptop alike. */
   --ambient:
-    radial-gradient(1100px 620px at 8% -12%, rgba(11,110,102,0.20), transparent 60%),
-    radial-gradient(900px 520px at 96% 6%, rgba(255,145,90,0.15), transparent 58%),
-    radial-gradient(1000px 680px at 46% 105%, rgba(94,132,255,0.12), transparent 60%);
+    radial-gradient(122vmin 69vmin at 8% -12%, rgba(11,110,102,0.20), transparent 60%),
+    radial-gradient(100vmin 58vmin at 96% 6%, rgba(255,145,90,0.15), transparent 58%),
+    radial-gradient(111vmin 76vmin at 46% 105%, rgba(94,132,255,0.12), transparent 60%);
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
@@ -61,9 +69,9 @@ THEME_CSS = """
     --glass-border: rgba(255,255,255,0.10); --glass-sheen: rgba(255,255,255,0.10);
     --glass-shadow: 0 1px 1px rgba(255,255,255,0.05) inset, 0 12px 40px -8px rgba(0,0,0,0.5), 0 2px 10px rgba(0,0,0,0.35);
     --ambient:
-      radial-gradient(1100px 620px at 8% -12%, rgba(63,191,175,0.22), transparent 60%),
-      radial-gradient(900px 520px at 96% 6%, rgba(255,145,90,0.10), transparent 58%),
-      radial-gradient(1000px 680px at 46% 105%, rgba(94,132,255,0.14), transparent 60%);
+      radial-gradient(122vmin 69vmin at 8% -12%, rgba(63,191,175,0.22), transparent 60%),
+      radial-gradient(100vmin 58vmin at 96% 6%, rgba(255,145,90,0.10), transparent 58%),
+      radial-gradient(111vmin 76vmin at 46% 105%, rgba(94,132,255,0.14), transparent 60%);
   }
 }
 * { box-sizing: border-box; }
@@ -92,12 +100,18 @@ body {
    document) so it reads the same regardless of scroll position or how
    tall the page is. Off entirely under reduced-motion. */
 .scan-beam {
-  position: fixed; left: 0; right: 0; top: -160px; height: 160px; z-index: 30;
+  position: fixed; left: 0; right: 0; top: -220px; height: 220px; z-index: 30;
   pointer-events: none; mix-blend-mode: overlay;
-  background: linear-gradient(180deg, transparent, rgba(11,110,102,0.5) 42%, rgba(94,132,255,0.4) 58%, transparent);
-  animation: scan-beam-sweep 13s ease-in-out infinite;
+  /* two layered gradients: a wide soft color band for the tint effect,
+     plus a slim near-white core at its center so there's an actual bright
+     line to track with the eye -- the first version was color-tint only,
+     which read as barely-there. */
+  background:
+    linear-gradient(180deg, transparent 46%, rgba(255,255,255,0.95) 49.5%, rgba(255,255,255,0.95) 50.5%, transparent 54%),
+    linear-gradient(180deg, transparent, rgba(11,110,102,0.85) 40%, rgba(94,132,255,0.75) 60%, transparent);
+  animation: scan-beam-sweep 9s ease-in-out infinite;
 }
-@keyframes scan-beam-sweep { 0%, 100% { top: -160px; } 50% { top: 100vh; } }
+@keyframes scan-beam-sweep { 0%, 100% { top: -220px; } 50% { top: 100vh; } }
 @media (prefers-reduced-motion: reduce) { .scan-beam { display: none; } }
 
 .mono, code { font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace; }
@@ -173,7 +187,7 @@ h2 { font-family: "Newsreader", Georgia, serif; font-weight: 600; font-size: 21p
 .hero-title-mark { font-weight: 800; color: var(--brand-dark); }
 .hero-tagline { font-family: "Newsreader", Georgia, serif; font-weight: 500; font-size: 20px; color: var(--ink-soft); margin: 0; }
 
-.scan-section { max-width: 460px; margin: 0 auto; padding: 0 24px 8px; }
+.scan-section { max-width: 640px; margin: 0 auto; padding: 0 24px 8px; }
 .scan-form { display: flex; flex-direction: column; gap: 12px; }
 .scan-field { position: relative; }
 /* Compound selector (class + element + attribute) so this reliably beats
@@ -222,12 +236,7 @@ h2 { font-family: "Newsreader", Georgia, serif; font-weight: 600; font-size: 21p
 }
 .info-tip:hover .tip-text, .info-tip:focus-within .tip-text { opacity: 1; transform: translateY(0); }
 
-/* nowrap on the acronym line only -- .sub is a separate block child and
-   gets its wrap behavior restored explicitly, since white-space inherits
-   and would otherwise force the caption line flat too. */
 .mad-lockup.centered { text-align: center; margin: 26px auto 0; }
-.mad-lockup.centered .lockup-line { white-space: nowrap; }
-.mad-lockup .sub { white-space: normal; }
 
 .section { max-width: 980px; margin: 0 auto; padding: 56px 24px; }
 .section-head { text-align: center; margin-bottom: 56px; }
@@ -265,7 +274,13 @@ h2 { font-family: "Newsreader", Georgia, serif; font-weight: 600; font-size: 21p
   .stat-panel + .stat-panel { border-left: none; border-top: 1px solid var(--glass-border); padding-top: 36px; }
 }
 .pie-figure { display: flex; flex-direction: column; align-items: center; }
-.pie-figure .pie-caption { margin-top: 14px; font-size: 13.5px; color: var(--ink-soft); }
+/* Was scoped ".pie-figure .pie-caption" -- an ancestor restriction that
+   only the first panel's caption actually satisfies (bar/bignum captions
+   are plain <p> siblings of .bar-figure/.bignum-figure, not descendants
+   of .pie-figure), so the other two silently fell back to unstyled
+   default paragraph text: bigger, darker, different margin -- exactly
+   the "different font under each chart" the user was seeing. */
+.pie-caption { margin-top: 14px; font-size: 13.5px; color: var(--ink-soft); }
 .bar-figure { display: flex; align-items: flex-end; justify-content: center; gap: 32px; height: 168px; margin-bottom: 14px; }
 .bar-figure .bar-col { display: flex; flex-direction: column; align-items: center; justify-content: flex-end; height: 100%; }
 .bar-figure .bar { width: 48px; border-radius: 7px 7px 0 0; transition: height 0.2s linear; }
@@ -309,7 +324,13 @@ h2 { font-family: "Newsreader", Georgia, serif; font-weight: 600; font-size: 21p
 }
 .mad-lockup { font-size: 15px; color: var(--ink-soft); margin: -4px 0 24px; }
 .mad-lockup .hl { color: var(--brand-dark); font-weight: 800; }
-.mad-lockup .sub { display: block; font-size: 12px; color: var(--muted); margin-top: 2px; }
+/* .sub used to be a separate block line ("caption" under the acronym
+   headline) -- deliberately merged inline now so the whole phrase reads
+   as one continuous line ("...Platform for digital accessibility
+   compliance") instead of an artificial headline/caption split that kept
+   reading as "stuck in two lines" no matter how the internal wrapping was
+   tuned. Muted color is the only remaining distinction. */
+.mad-lockup .sub { color: var(--muted); }
 @media (max-width: 860px) { .hero-split { grid-template-columns: 1fr; } .hero-shot img { transform: none; } }
 .hero-eyebrow {
   display: inline-flex; align-items: center; gap: 6px; font-family: "JetBrains Mono", monospace;
