@@ -127,11 +127,14 @@ h2 { font-family: "Newsreader", Georgia, serif; font-weight: 600; font-size: 21p
 }
 .how-step h3 { font-size: 16px; margin: 0; }
 .how-arrow { align-self: center; color: var(--border-strong); font-size: 22px; margin-top: 70px; }
-@media (max-width: 760px) { .how-arrow { display: none; } }
+@media (max-width: 760px) { .how-arrow { display: none; } .stats-grid { grid-template-columns: 1fr; } }
 
 /* why it matters: charts */
-.stats-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 32px; align-items: start; margin-bottom: 40px; }
-.stat-panel { text-align: center; }
+.stats-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 24px; align-items: stretch; margin-bottom: 40px; }
+.stat-panel {
+  text-align: center; background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
+  box-shadow: var(--shadow); padding: 28px 20px;
+}
 .stat-panel .panel-label { font-family: "JetBrains Mono", monospace; font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); margin-bottom: 14px; }
 .pie-figure { display: flex; flex-direction: column; align-items: center; }
 .pie-figure .pie-caption { margin-top: 12px; font-size: 13px; color: var(--ink-soft); }
