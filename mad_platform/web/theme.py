@@ -295,9 +295,19 @@ h2 { font-family: "Newsreader", Georgia, serif; font-weight: 600; font-size: 21p
   font-family: "JetBrains Mono", monospace; font-size: 11px; font-weight: 700; letter-spacing: 0.02em;
   color: var(--brand-dark); background: var(--brand-tint); border-radius: 999px;
 }
+/* .bar-col used to be height:100% with justify-content:flex-end, forcing
+   its own content (value label + bar + year label) to fit inside a fixed
+   190px box. Once a bar's real height plus its two labels exceeded that,
+   the flex column's default flex-shrink:1 silently compressed the bar to
+   fit -- which is exactly why the taller (170px-target) bar rendered at
+   nearly the same height as the shorter one: it was being squashed back
+   down to fit the budget, not actually reaching its target. .bar-col is
+   auto-height now (sized to its real content, no shrink pressure
+   possible); align-items:flex-end on .bar-figure alone is what bottom-
+   aligns the columns so the bars still share one baseline. */
 .bar-figure { display: flex; align-items: flex-end; justify-content: center; gap: 32px; height: 190px; margin-bottom: 14px; }
-.bar-figure .bar-col { display: flex; flex-direction: column; align-items: center; justify-content: flex-end; height: 100%; }
-.bar-figure .bar { width: 48px; border-radius: 7px 7px 0 0; transition: height 0.2s linear; }
+.bar-figure .bar-col { display: flex; flex-direction: column; align-items: center; }
+.bar-figure .bar { width: 48px; border-radius: 7px 7px 0 0; flex-shrink: 0; transition: height 0.2s linear; }
 .bar-figure .bar-val { font-family: "JetBrains Mono", monospace; font-size: 13.5px; font-weight: 700; margin-bottom: 6px; font-variant-numeric: tabular-nums; }
 .bar-figure .bar-lbl { font-size: 11.5px; color: var(--muted); margin-top: 8px; }
 .bignum-figure { display: flex; align-items: center; justify-content: center; gap: 20px; height: 168px; }
