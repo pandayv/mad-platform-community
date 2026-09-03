@@ -93,6 +93,65 @@ h2 { font-family: "Newsreader", Georgia, serif; font-weight: 600; font-size: 21p
 .site-footer a { color: var(--muted); text-decoration: none; }
 .site-footer a:hover { color: var(--brand-dark); }
 
+/* ---- landing v2: scanner-forward layout ---- */
+.ribbon {
+  background: var(--brand-tint); border-bottom: 1px solid var(--border);
+  padding: 14px 24px; text-align: center;
+}
+.ribbon p { margin: 0; font-family: "Newsreader", Georgia, serif; font-weight: 600; font-size: 18px; color: var(--ink); }
+.scan-section { max-width: 720px; margin: 0 auto; padding: 44px 24px 8px; }
+.scan-card-head { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; flex-wrap: wrap; margin-bottom: 18px; }
+.scan-card-head h1 { font-size: 26px; margin: 0; }
+.mad-lockup.centered { text-align: center; margin: 30px auto 0; }
+
+.section { max-width: 980px; margin: 0 auto; padding: 56px 24px; }
+.section-head { text-align: center; margin-bottom: 36px; }
+.section-head h2 { font-size: 26px; margin-bottom: 8px; }
+.section-head p { color: var(--muted); font-size: 14.5px; margin: 0; }
+.section.alt { background: var(--surface); border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); }
+.section.alt > .section-head, .section.alt > .how-visual, .section.alt > .stats-grid { max-width: 980px; margin-left: auto; margin-right: auto; }
+
+/* how it works: real screenshots, numbered */
+.how-visual { display: flex; align-items: flex-start; justify-content: center; gap: 56px; flex-wrap: wrap; }
+.how-step { flex: 1; min-width: 280px; max-width: 400px; text-align: center; }
+.how-step .shot-frame {
+  position: relative; border-radius: 10px; border: 1px solid var(--border); background: var(--surface);
+  box-shadow: var(--shadow); overflow: hidden; margin-bottom: 16px;
+}
+.how-step img { width: 100%; display: block; }
+.how-step .step-badge {
+  position: absolute; top: -14px; left: -14px; width: 34px; height: 34px; border-radius: 50%;
+  background: var(--brand); color: #fff; display: flex; align-items: center; justify-content: center;
+  font-family: "Newsreader", Georgia, serif; font-weight: 700; font-size: 16px; box-shadow: var(--shadow);
+  z-index: 2;
+}
+.how-step h3 { font-size: 16px; margin: 0; }
+.how-arrow { align-self: center; color: var(--border-strong); font-size: 22px; margin-top: 70px; }
+@media (max-width: 760px) { .how-arrow { display: none; } }
+
+/* why it matters: charts */
+.stats-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 32px; align-items: start; margin-bottom: 40px; }
+.stat-panel { text-align: center; }
+.stat-panel .panel-label { font-family: "JetBrains Mono", monospace; font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); margin-bottom: 14px; }
+.pie-figure { display: flex; flex-direction: column; align-items: center; }
+.pie-figure .pie-caption { margin-top: 12px; font-size: 13px; color: var(--ink-soft); }
+.bar-figure { display: flex; align-items: flex-end; justify-content: center; gap: 28px; height: 140px; margin-bottom: 12px; }
+.bar-figure .bar-col { display: flex; flex-direction: column; align-items: center; justify-content: flex-end; height: 100%; }
+.bar-figure .bar { width: 44px; border-radius: 6px 6px 0 0; }
+.bar-figure .bar-val { font-family: "JetBrains Mono", monospace; font-size: 12.5px; font-weight: 700; margin-bottom: 6px; }
+.bar-figure .bar-lbl { font-size: 11.5px; color: var(--muted); margin-top: 8px; }
+.bignum-figure { display: flex; align-items: center; justify-content: center; gap: 18px; height: 140px; }
+.bignum-figure .bn { text-align: center; }
+.bignum-figure .bn b { display: block; font-family: "Newsreader", Georgia, serif; font-size: 34px; line-height: 1; }
+.bignum-figure .bn.bad b { color: var(--crit); }
+.bignum-figure .bn.good b { color: var(--brand-dark); }
+.bignum-figure .bn span { font-size: 11.5px; color: var(--muted); display: block; margin-top: 6px; }
+.bignum-figure .vs { color: var(--muted); font-size: 12px; font-family: "JetBrains Mono", monospace; }
+.stats-quote {
+  max-width: 640px; margin: 0 auto; text-align: center; font-family: "Newsreader", Georgia, serif;
+  font-style: italic; font-size: 18px; line-height: 1.55; color: var(--ink-soft);
+}
+
 /* ---- landing hero ---- */
 .hero-band {
   background:

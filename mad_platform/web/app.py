@@ -139,37 +139,14 @@ def _render_form(error: str | None = None) -> str:
 </head>
 <body>
 {_site_header("/")}
-<div class="hero-band">
-  <div class="hero-inner hero-split">
-    <div class="hero-copy">
+<div class="ribbon"><p>Know what's exposed, before a demand letter tells you.</p></div>
+
+<div class="scan-section" id="scan">
+  <div class="card">
+    <div class="scan-card-head">
+      <h1>Scan your site</h1>
       <span class="hero-eyebrow"><span class="dot-b"></span>Community Edition &middot; free &middot; no account needed</span>
-      <h1>Know what's exposed, before a demand letter tells you.</h1>
-      <div class="mad-lockup">
-        <span class="hl">M</span>ulti-<span class="hl">A</span>gent <span class="hl">D</span>efense <span class="hl">Platform</span>
-        <span class="sub">for digital accessibility compliance</span>
-      </div>
-      <p class="hero-lede">96% of the web's most visited sites fail basic accessibility tests.
-      That's not a statistic, it's most of the internet simply not working. This scans yours,
-      verifies what it finds, and hands you a real fix, not just a list of problems.</p>
-      <div class="stat-row">
-        <div class="stat"><b>5,000+</b><span>accessibility lawsuits filed in the US every year</span></div>
-        <div class="stat"><b>10&times;</b><span>more demand letters go out for every one that reaches court</span></div>
-        <div class="stat"><b>$0</b><span>cost to check, for as long as this stays free to run</span></div>
-      </div>
     </div>
-    <div class="hero-shot">
-      <img src="/static/hero-dashboard.png" alt="A completed MAD Platform scan report: a site accessibility score, a severity breakdown of findings, and a chart of issues by WCAG principle">
-    </div>
-  </div>
-</div>
-<div class="page">
-  <div class="how-row">
-    <div class="how-card"><div class="step-n">01</div><h3>Scan</h3><p>Paste your URL. It reads your site the way a real visitor would, then checks the pages that matter most.</p></div>
-    <div class="how-card"><div class="step-n">02</div><h3>Verify</h3><p>Every flag gets independently double-checked before it's shown to you, so you're not chasing false alarms.</p></div>
-    <div class="how-card"><div class="step-n">03</div><h3>Fix</h3><p>Confirmed issues come with a concrete fix and a downloadable, tracker-ready list, not just a score.</p></div>
-  </div>
-  <div class="card" id="scan" style="margin-top:36px">
-    <h2>Scan your site</h2>
     <form action="/scan" method="post">
       <label class="f-label" for="url">Website URL</label>
       <input id="url" type="url" name="url" placeholder="https://example.com" required autofocus>
@@ -177,11 +154,74 @@ def _render_form(error: str | None = None) -> str:
       <input id="email" type="email" name="email" placeholder="you@example.com" required autocomplete="email">
       <div class="tagline" style="margin:4px 0 0;font-size:12.5px">We'll send your full report here, and use it to keep this free tool honest about whether it's actually helping. Never shared, never sold, see the <a href="/privacy">privacy policy</a>.</div>
       {code_field}
-      <div style="margin-top:14px"><button type="submit">Scan my site, free →</button></div>
+      <div style="margin-top:14px"><button type="submit">Scan my site, free &rarr;</button></div>
     </form>
     {error_html}
   </div>
+  <div class="mad-lockup centered">
+    <span class="hl">M</span>ulti-<span class="hl">A</span>gent <span class="hl">D</span>efense <span class="hl">Platform</span>
+    <span class="sub">for digital accessibility compliance</span>
+  </div>
 </div>
+
+<div class="section alt">
+  <div class="section-head">
+    <h2>How it works</h2>
+    <p>Two steps, no account, no setup.</p>
+  </div>
+  <div class="how-visual">
+    <div class="how-step">
+      <div class="shot-frame"><span class="step-badge">1</span><img src="/static/how-step1.png" alt="The scan form: enter your website URL and email"></div>
+      <h3>Enter your site</h3>
+    </div>
+    <div class="how-arrow">&rarr;</div>
+    <div class="how-step">
+      <div class="shot-frame"><span class="step-badge">2</span><img src="/static/hero-dashboard.png" alt="A completed scan report: site score, severity breakdown, and a chart of issues by WCAG principle"></div>
+      <h3>See your report</h3>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <div class="section-head">
+    <h2>Why it matters</h2>
+    <p>The real numbers behind the risk, not marketing copy.</p>
+  </div>
+  <div class="stats-grid">
+    <div class="stat-panel">
+      <div class="panel-label">Sites that fail</div>
+      <div class="pie-figure">
+        <svg width="140" height="140" viewBox="0 0 140 140" role="img" aria-label="96 percent of sites fail basic accessibility tests">
+          <circle cx="70" cy="70" r="58" fill="none" stroke="var(--border)" stroke-width="22"/>
+          <circle cx="70" cy="70" r="58" fill="none" stroke="var(--high)" stroke-width="22"
+            stroke-dasharray="349.9 364.4" stroke-dashoffset="0" transform="rotate(-90 70 70)"/>
+          <text x="70" y="65" text-anchor="middle" font-family="Newsreader, Georgia, serif" font-size="27" font-weight="700" fill="var(--ink)">96%</text>
+          <text x="70" y="84" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="9" fill="var(--muted)">FAIL</text>
+        </svg>
+        <p class="pie-caption">96% of the web's most visited sites fail basic accessibility tests</p>
+      </div>
+    </div>
+    <div class="stat-panel">
+      <div class="panel-label">Website lawsuits, federal court</div>
+      <div class="bar-figure">
+        <div class="bar-col"><span class="bar-val">2,452</span><div class="bar" style="height:78px;background:var(--border-strong)"></div><span class="bar-lbl">2024</span></div>
+        <div class="bar-col"><span class="bar-val">3,117</span><div class="bar" style="height:100px;background:var(--brand)"></div><span class="bar-lbl">2025</span></div>
+      </div>
+      <p class="pie-caption">Website-specific accessibility lawsuits grew 27% in one year</p>
+    </div>
+    <div class="stat-panel">
+      <div class="panel-label">Cost to find out</div>
+      <div class="bignum-figure">
+        <div class="bn bad"><b>$10,000</b><span>avg. small-business settlement</span></div>
+        <div class="vs">vs</div>
+        <div class="bn good"><b>$0</b><span>your cost to scan</span></div>
+      </div>
+      <p class="pie-caption">5,000+ digital accessibility lawsuits are filed across US federal and state courts every year</p>
+    </div>
+  </div>
+  <p class="stats-quote">"96% of the web's most visited sites fail basic accessibility tests. That's not a statistic, it's most of the internet simply not working for people with disabilities."</p>
+</div>
+
 {_site_footer()}
 </body>
 </html>
