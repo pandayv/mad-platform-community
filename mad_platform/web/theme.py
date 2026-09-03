@@ -187,7 +187,11 @@ h2 { font-family: "Newsreader", Georgia, serif; font-weight: 600; font-size: 21p
 .hero-title-mark { font-weight: 800; color: var(--brand-dark); }
 .hero-tagline { font-family: "Newsreader", Georgia, serif; font-weight: 500; font-size: 20px; color: var(--ink-soft); margin: 0; }
 
-.scan-section { max-width: 640px; margin: 0 auto; padding: 0 24px 8px; }
+/* scroll-margin-top so a browser jumping to #scan (the header's "Scan a
+   site" link, from another page) doesn't tuck it under the sticky header
+   -- covers the header at both its one-line (~65px) and wrapped-to-two-
+   lines (~95px, narrow phones) heights. */
+.scan-section { max-width: 640px; margin: 0 auto; padding: 0 24px 8px; scroll-margin-top: 90px; }
 .scan-form { display: flex; flex-direction: column; gap: 12px; }
 .scan-field { position: relative; }
 /* Compound selector (class + element + attribute) so this reliably beats
@@ -236,10 +240,13 @@ h2 { font-family: "Newsreader", Georgia, serif; font-weight: 600; font-size: 21p
 }
 .info-tip:hover .tip-text, .info-tip:focus-within .tip-text { opacity: 1; transform: translateY(0); }
 
-.mad-lockup.centered {
-  text-align: center; margin-top: 36px; padding-top: 22px;
-  border-top: 1px solid var(--glass-border);
-}
+/* No border here on purpose: a 1px divider under mix-blend-mode:overlay
+   (the scan beam passes over this whole section) flares into a bright,
+   glitchy-looking line whenever the beam crosses it -- confirmed by
+   forcing the beam to that exact position. Whitespace alone (this much
+   margin+padding) still reads as a clear separation from the form above
+   without giving the beam anything to blow out. */
+.mad-lockup.centered { text-align: center; margin-top: 40px; padding-top: 24px; }
 
 .section { max-width: 980px; margin: 0 auto; padding: 56px 24px; }
 .section-head { text-align: center; margin-bottom: 56px; }
@@ -276,6 +283,15 @@ h2 { font-family: "Newsreader", Georgia, serif; font-weight: 600; font-size: 21p
   .stats-grid { grid-template-columns: 1fr; gap: 36px; }
   .stat-panel + .stat-panel { border-left: none; border-top: 1px solid var(--glass-border); padding-top: 36px; }
 }
+/* Every panel gets the same two-row skeleton -- a fixed-height "topline"
+   (empty for pie/bignum, the growth badge for the bar chart) then a
+   fixed-height "visual" row -- so all three captions start at exactly the
+   same y regardless of what each panel's own content needs. Matching
+   pixel budgets across three different chart types was fragile (two
+   separate bugs already came from exactly that); matching *structure*
+   instead makes the alignment a guarantee, not an estimate. */
+.stat-topline { height: 32px; display: flex; align-items: center; justify-content: center; margin-bottom: 8px; }
+.stat-visual { height: 210px; display: flex; flex-direction: column; align-items: center; justify-content: center; }
 .pie-figure { display: flex; flex-direction: column; align-items: center; }
 /* Was scoped ".pie-figure .pie-caption" -- an ancestor restriction that
    only the first panel's caption actually satisfies (bar/bignum captions
@@ -289,9 +305,10 @@ h2 { font-family: "Newsreader", Georgia, serif; font-weight: 600; font-size: 21p
    it with a truncated axis would be exactly the misleading-chart trick
    this site shouldn't use. The growth badge makes the difference explicit
    via text instead of asking a ~20% height gap to read as "different" on
-   its own. */
+   its own. Lives in .stat-topline now, not stacked directly above the
+   bars -- that's what let a tall bar's value label collide with it. */
 .bar-growth {
-  display: inline-flex; align-items: center; gap: 5px; margin-bottom: 14px; padding: 4px 11px;
+  display: inline-flex; align-items: center; gap: 5px; padding: 4px 11px;
   font-family: "JetBrains Mono", monospace; font-size: 11px; font-weight: 700; letter-spacing: 0.02em;
   color: var(--brand-dark); background: var(--brand-tint); border-radius: 999px;
 }
@@ -299,18 +316,20 @@ h2 { font-family: "Newsreader", Georgia, serif; font-weight: 600; font-size: 21p
    its own content (value label + bar + year label) to fit inside a fixed
    190px box. Once a bar's real height plus its two labels exceeded that,
    the flex column's default flex-shrink:1 silently compressed the bar to
-   fit -- which is exactly why the taller (170px-target) bar rendered at
-   nearly the same height as the shorter one: it was being squashed back
-   down to fit the budget, not actually reaching its target. .bar-col is
-   auto-height now (sized to its real content, no shrink pressure
-   possible); align-items:flex-end on .bar-figure alone is what bottom-
-   aligns the columns so the bars still share one baseline. */
-.bar-figure { display: flex; align-items: flex-end; justify-content: center; gap: 32px; height: 190px; margin-bottom: 14px; }
+   fit -- which is exactly why a taller-target bar rendered at nearly the
+   same height as the shorter one: it was being squashed back down to fit
+   the budget, not actually reaching its target. .bar-col is auto-height
+   now (sized to its real content, no shrink pressure possible);
+   align-items:flex-end on .bar-figure alone is what bottom-aligns the
+   columns so the bars still share one baseline -- and .stat-visual's
+   210px budget is sized generously above the tallest real bar (120px)
+   plus both labels, so there's no overflow this time either. */
+.bar-figure { display: flex; align-items: flex-end; justify-content: center; gap: 32px; }
 .bar-figure .bar-col { display: flex; flex-direction: column; align-items: center; }
 .bar-figure .bar { width: 48px; border-radius: 7px 7px 0 0; flex-shrink: 0; transition: height 0.2s linear; }
 .bar-figure .bar-val { font-family: "JetBrains Mono", monospace; font-size: 13.5px; font-weight: 700; margin-bottom: 6px; font-variant-numeric: tabular-nums; }
 .bar-figure .bar-lbl { font-size: 11.5px; color: var(--muted); margin-top: 8px; }
-.bignum-figure { display: flex; align-items: center; justify-content: center; gap: 20px; height: 168px; }
+.bignum-figure { display: flex; align-items: center; justify-content: center; gap: 20px; }
 .bignum-figure .bn { text-align: center; }
 .bignum-figure .bn b { display: block; font-family: "Newsreader", Georgia, serif; font-size: 42px; line-height: 1; font-variant-numeric: tabular-nums; }
 .bignum-figure .bn.bad b { color: var(--crit); }

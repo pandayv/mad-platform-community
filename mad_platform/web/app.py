@@ -202,31 +202,39 @@ def _render_form(error: str | None = None) -> str:
   </div>
   <div class="stats-grid">
     <div class="stat-panel">
-      <div class="pie-figure">
-        <svg width="160" height="160" viewBox="0 0 140 140" role="img" aria-label="96 percent of sites fail basic accessibility tests">
-          <circle cx="70" cy="70" r="58" fill="none" stroke="var(--border)" stroke-width="20"/>
-          <circle class="pie-arc" cx="70" cy="70" r="58" fill="none" stroke="var(--high)" stroke-width="20"
-            stroke-dasharray="349.9 364.4" stroke-dashoffset="0" transform="rotate(-90 70 70)"
-            data-target="349.9" data-circumference="364.4"/>
-          <text class="pie-pct" data-target="96" x="70" y="65" text-anchor="middle" font-family="Newsreader, Georgia, serif" font-size="30" font-weight="700" fill="var(--ink)">96%</text>
-          <text x="70" y="86" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="9" fill="var(--muted)">FAIL</text>
-        </svg>
-        <p class="pie-caption">96% of the web's most visited sites fail basic accessibility tests</p>
+      <div class="stat-topline"></div>
+      <div class="stat-visual">
+        <div class="pie-figure">
+          <svg width="160" height="160" viewBox="0 0 140 140" role="img" aria-label="96 percent of sites fail basic accessibility tests">
+            <circle cx="70" cy="70" r="58" fill="none" stroke="var(--border)" stroke-width="20"/>
+            <circle class="pie-arc" cx="70" cy="70" r="58" fill="none" stroke="var(--high)" stroke-width="20"
+              stroke-dasharray="349.9 364.4" stroke-dashoffset="0" transform="rotate(-90 70 70)"
+              data-target="349.9" data-circumference="364.4"/>
+            <text class="pie-pct" data-target="96" x="70" y="65" text-anchor="middle" font-family="Newsreader, Georgia, serif" font-size="30" font-weight="700" fill="var(--ink)">96%</text>
+            <text x="70" y="86" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="9" fill="var(--muted)">FAIL</text>
+          </svg>
+        </div>
       </div>
+      <p class="pie-caption">96% of the web's most visited sites fail basic accessibility tests</p>
     </div>
     <div class="stat-panel">
-      <div class="bar-growth">&uarr; 23% year-over-year</div>
-      <div class="bar-figure">
-        <div class="bar-col"><span class="bar-val" data-val="4000">4,000</span><div class="bar" data-h="138" style="height:138px;background:var(--border-strong)"></div><span class="bar-lbl">2024</span></div>
-        <div class="bar-col"><span class="bar-val" data-val="4928">4,928</span><div class="bar" data-h="170" style="height:170px;background:var(--brand)"></div><span class="bar-lbl">2025</span></div>
+      <div class="stat-topline"><span class="bar-growth">&uarr; 23% year-over-year</span></div>
+      <div class="stat-visual">
+        <div class="bar-figure">
+          <div class="bar-col"><span class="bar-val" data-val="4000">4,000</span><div class="bar" data-h="97" style="height:97px;background:var(--border-strong)"></div><span class="bar-lbl">2024</span></div>
+          <div class="bar-col"><span class="bar-val" data-val="4928">4,928</span><div class="bar" data-h="120" style="height:120px;background:var(--brand)"></div><span class="bar-lbl">2025</span></div>
+        </div>
       </div>
       <p class="pie-caption">Website accessibility lawsuits across federal and state courts grew 23% in one year, reaching nearly 5,000 in 2025 -- plus an estimated 7&ndash;10 demand letters for every one that actually reaches court.</p>
     </div>
     <div class="stat-panel">
-      <div class="bignum-figure">
-        <div class="bn bad"><b data-val="10000">$10,000</b><span>avg. small-business settlement</span></div>
-        <div class="vs">vs</div>
-        <div class="bn good"><b>$0</b><span>your cost to scan</span></div>
+      <div class="stat-topline"></div>
+      <div class="stat-visual">
+        <div class="bignum-figure">
+          <div class="bn bad"><b data-val="10000">$10,000</b><span>avg. small-business settlement</span></div>
+          <div class="vs">vs</div>
+          <div class="bn good"><b>$0</b><span>your cost to scan</span></div>
+        </div>
       </div>
       <p class="pie-caption">Small businesses typically settle for $5,000&ndash;$15,000; larger companies pay $30,000&ndash;$85,000</p>
     </div>
@@ -235,6 +243,28 @@ def _render_form(error: str | None = None) -> str:
 </section>
 
 {_site_footer()}
+<script>
+(function() {{
+  // Cross-page navigation to /#scan (the header's "Scan a site" link from
+  // FAQ/Terms/Privacy) was landing well past the form -- the browser's
+  // native fragment-scroll fires on the initial layout pass, but web
+  // fonts loading afterward reflow the page (different text metrics),
+  // leaving the anchor scrolled to a since-stale position. Re-aligning
+  // after fonts actually finish (and again on window load, as a fallback
+  // for browsers/cases where document.fonts isn't reliable) fixes it
+  // without needing to guess a hardcoded delay.
+  if (location.hash !== '#scan') return;
+  function jump() {{
+    var el = document.getElementById('scan');
+    if (el) el.scrollIntoView({{block: 'start'}});
+  }}
+  jump();
+  if (window.document && document.fonts && document.fonts.ready) {{
+    document.fonts.ready.then(jump);
+  }}
+  window.addEventListener('load', jump);
+}})();
+</script>
 <script>
 (function() {{
   if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
