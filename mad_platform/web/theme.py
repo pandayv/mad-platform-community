@@ -116,9 +116,9 @@ h2 { font-family: "Newsreader", Georgia, serif; font-weight: 600; font-size: 21p
 .how-step { flex: 1; min-width: 280px; max-width: 400px; text-align: center; }
 .how-step .shot-frame {
   position: relative; border-radius: 10px; border: 1px solid var(--border); background: var(--surface);
-  box-shadow: var(--shadow); overflow: hidden; margin-bottom: 16px;
+  box-shadow: var(--shadow); margin-bottom: 16px;
 }
-.how-step img { width: 100%; display: block; }
+.how-step img { width: 100%; display: block; border-radius: 10px; overflow: hidden; }
 .how-step .step-badge {
   position: absolute; top: -14px; left: -14px; width: 34px; height: 34px; border-radius: 50%;
   background: var(--brand); color: #fff; display: flex; align-items: center; justify-content: center;
