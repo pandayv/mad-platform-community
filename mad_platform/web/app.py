@@ -92,22 +92,28 @@ _BASE_STYLE = theme.THEME_CSS
 _NAV_LINKS = [("/", "Home"), ("/faq", "FAQ"), ("/terms", "Terms"), ("/privacy", "Privacy")]
 
 
-def _site_header(active: str = "/") -> str:
+def _site_header(active: str = "/", show_cta: bool = True) -> str:
     """The one nav shared by every marketing/content page (home, faq, terms,
     privacy). Deliberately not used on the status/review/report pages --
     those are mid-task screens (watching a scan run, resolving a finding),
     where a full nav bar is a distraction from the one thing that page is
     for, not a usability win. Their existing simple "brand mark links home"
     header stays as-is on purpose.
+
+    show_cta=False on the homepage itself: the scan form is already the
+    first thing on the page there, so a second "Scan a site" button in the
+    header is a redundant CTA competing with the real one. Every other page
+    (FAQ, Terms, Privacy) keeps it -- that's the one way back to the form.
     """
     def _link(href: str, label: str) -> str:
         cls = ' class="active"' if href == active else ""
         return f'<a href="{href}"{cls}>{label}</a>'
 
     links = "".join(_link(href, label) for href, label in _NAV_LINKS)
+    cta = '<a class="cta" href="/#scan">Scan a site</a>' if show_cta else ""
     return f"""<header class="site-header"><div class="site-header-inner">
   <a class="brand" href="/"><span class="dot-b"></span>MAD Platform</a>
-  <nav class="site-nav">{links}<a class="cta" href="/#scan">Scan a site</a></nav>
+  <nav class="site-nav">{links}{cta}</nav>
 </div></header>"""
 
 
@@ -121,8 +127,8 @@ def _site_footer() -> str:
 
 def _render_form(error: str | None = None) -> str:
     code_field = (
-        '<label class="f-label" for="code">Access code</label>'
-        '<input id="code" type="password" name="code" required autocomplete="off">'
+        '<label class="f-label sr-only" for="code">Access code</label>'
+        '<input id="code" type="password" name="code" placeholder="Access code" required autocomplete="off">'
         if _ACCESS_CODE
         else ""
     )
@@ -138,40 +144,46 @@ def _render_form(error: str | None = None) -> str:
 <style>{_BASE_STYLE}</style>
 </head>
 <body>
-{_site_header("/")}
-<div class="ribbon"><p>Know what's exposed, before a demand letter tells you.</p></div>
+{_site_header("/", show_cta=False)}
 
-<div class="scan-section" id="scan">
-  <div class="card glass-sheen">
-    <div class="scan-card-head">
-      <h1>Scan your site</h1>
-      <span class="hero-eyebrow"><span class="dot-b"></span><span class="hero-eyebrow-text">Community Edition &middot; free &middot; no account needed</span></span>
-    </div>
-    <form action="/scan" method="post">
-      <label class="f-label" for="url">Website URL</label>
-      <input id="url" type="url" name="url" placeholder="https://example.com" required autofocus>
-      <label class="f-label" for="email">Your email</label>
-      <input id="email" type="email" name="email" placeholder="you@example.com" required autocomplete="email">
-      <div class="tagline" style="margin:4px 0 0;font-size:12.5px">We'll send your full report here, and use it to keep this free tool honest about whether it's actually helping. Never shared, never sold, see the <a href="/privacy">privacy policy</a>.</div>
+<section class="view">
+  <div class="hero-block">
+    <span class="hero-eyebrow"><span class="dot-b"></span><span class="hero-eyebrow-text">Community Edition &middot; free &middot; no account needed</span></span>
+    <h1 class="hero-title"><span class="hero-title-mark">MAD</span> Platform</h1>
+    <p class="hero-tagline">Know what's exposed, before a demand letter tells you.</p>
+  </div>
+
+  <div class="scan-section" id="scan">
+    <form class="scan-bar glass-sheen" action="/scan" method="post" aria-label="Scan your website for accessibility issues">
+      <label class="sr-only" for="url">Website URL</label>
+      <input id="url" class="scan-bar-url" type="url" name="url" placeholder="Enter your website URL" required autofocus>
+      <div class="scan-bar-email-wrap">
+        <label class="sr-only" for="email">Your email</label>
+        <input id="email" class="scan-bar-email" type="email" name="email" placeholder="Your email" required autocomplete="email" aria-describedby="email-tip">
+        <span class="info-tip" tabindex="0">
+          <span class="tip-icon" aria-hidden="true">?</span>
+          <span class="tip-text" id="email-tip" role="tooltip">We'll send your full report here, and use it to keep this free tool honest about whether it's actually helping. Never shared, never sold.</span>
+        </span>
+      </div>
       {code_field}
-      <div style="margin-top:14px"><button type="submit">Scan my site, free &rarr;</button></div>
+      <button type="submit" class="scan-bar-btn">Scan my site &rarr;</button>
     </form>
     {error_html}
+    <div class="mad-lockup centered">
+      <span class="hl">M</span>ulti-<span class="hl">A</span>gent <span class="hl">D</span>efense <span class="hl">Platform</span>
+      <span class="sub">for digital accessibility compliance</span>
+    </div>
   </div>
-  <div class="mad-lockup centered">
-    <span class="hl">M</span>ulti-<span class="hl">A</span>gent <span class="hl">D</span>efense <span class="hl">Platform</span>
-    <span class="sub">for digital accessibility compliance</span>
-  </div>
-</div>
+</section>
 
-<div class="section alt">
+<section class="view section alt">
   <div class="section-head">
     <h2>How it works</h2>
     <p>Two steps, no account, no setup.</p>
   </div>
   <div class="how-visual">
     <div class="how-step">
-      <div class="shot-frame glass-sheen"><span class="step-badge">1</span><img src="/static/how-step1.png" alt="The scan form: enter your website URL and email"></div>
+      <div class="shot-frame glass-sheen"><span class="step-badge">1</span><img src="/static/how-step1.png" alt="The scan bar: enter your website URL and email"></div>
       <h3>Enter your site</h3>
     </div>
     <div class="how-arrow">&rarr;</div>
@@ -180,49 +192,118 @@ def _render_form(error: str | None = None) -> str:
       <h3>See your report</h3>
     </div>
   </div>
-</div>
+</section>
 
-<div class="section">
+<section class="view section">
   <div class="section-head">
     <h2>Why it matters</h2>
     <p>The real numbers behind the risk, not marketing copy.</p>
   </div>
   <div class="stats-grid">
-    <div class="stat-panel glass-sheen">
-      <div class="panel-label">Sites that fail</div>
+    <div class="stat-panel">
       <div class="pie-figure">
-        <svg width="140" height="140" viewBox="0 0 140 140" role="img" aria-label="96 percent of sites fail basic accessibility tests">
-          <circle cx="70" cy="70" r="58" fill="none" stroke="var(--border)" stroke-width="22"/>
-          <circle cx="70" cy="70" r="58" fill="none" stroke="var(--high)" stroke-width="22"
-            stroke-dasharray="349.9 364.4" stroke-dashoffset="0" transform="rotate(-90 70 70)"/>
-          <text x="70" y="65" text-anchor="middle" font-family="Newsreader, Georgia, serif" font-size="27" font-weight="700" fill="var(--ink)">96%</text>
-          <text x="70" y="84" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="9" fill="var(--muted)">FAIL</text>
+        <svg width="160" height="160" viewBox="0 0 140 140" role="img" aria-label="96 percent of sites fail basic accessibility tests">
+          <circle cx="70" cy="70" r="58" fill="none" stroke="var(--border)" stroke-width="20"/>
+          <circle class="pie-arc" cx="70" cy="70" r="58" fill="none" stroke="var(--high)" stroke-width="20"
+            stroke-dasharray="349.9 364.4" stroke-dashoffset="0" transform="rotate(-90 70 70)"
+            data-target="349.9" data-circumference="364.4"/>
+          <text class="pie-pct" data-target="96" x="70" y="65" text-anchor="middle" font-family="Newsreader, Georgia, serif" font-size="30" font-weight="700" fill="var(--ink)">96%</text>
+          <text x="70" y="86" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="9" fill="var(--muted)">FAIL</text>
         </svg>
         <p class="pie-caption">96% of the web's most visited sites fail basic accessibility tests</p>
       </div>
     </div>
-    <div class="stat-panel glass-sheen">
-      <div class="panel-label">Website lawsuits, federal court</div>
+    <div class="stat-panel">
       <div class="bar-figure">
-        <div class="bar-col"><span class="bar-val">2,452</span><div class="bar" style="height:78px;background:var(--border-strong)"></div><span class="bar-lbl">2024</span></div>
-        <div class="bar-col"><span class="bar-val">3,117</span><div class="bar" style="height:100px;background:var(--brand)"></div><span class="bar-lbl">2025</span></div>
+        <div class="bar-col"><span class="bar-val" data-val="2452">2,452</span><div class="bar" data-h="78" style="height:78px;background:var(--border-strong)"></div><span class="bar-lbl">2024</span></div>
+        <div class="bar-col"><span class="bar-val" data-val="3117">3,117</span><div class="bar" data-h="100" style="height:100px;background:var(--brand)"></div><span class="bar-lbl">2025</span></div>
       </div>
       <p class="pie-caption">Website-specific accessibility lawsuits grew 27% in one year</p>
     </div>
-    <div class="stat-panel glass-sheen">
-      <div class="panel-label">Cost to find out</div>
+    <div class="stat-panel">
       <div class="bignum-figure">
-        <div class="bn bad"><b>$10,000</b><span>avg. small-business settlement</span></div>
+        <div class="bn bad"><b data-val="10000">$10,000</b><span>avg. small-business settlement</span></div>
         <div class="vs">vs</div>
         <div class="bn good"><b>$0</b><span>your cost to scan</span></div>
       </div>
-      <p class="pie-caption">5,000+ digital accessibility lawsuits are filed across US federal and state courts every year</p>
+      <p class="pie-caption">3,117 federal lawsuits over website accessibility were filed in 2025 alone</p>
     </div>
   </div>
   <p class="stats-quote">"96% of the web's most visited sites fail basic accessibility tests. That's not a statistic, it's most of the internet simply not working for people with disabilities."</p>
-</div>
+</section>
 
 {_site_footer()}
+<script>
+(function() {{
+  if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+  var grid = document.querySelector('.stats-grid');
+  if (!grid || !('IntersectionObserver' in window)) return;
+
+  function ease(t) {{ return 1 - Math.pow(1 - t, 3); }}
+
+  function animateNumber(el, target, duration, fmt) {{
+    var start = performance.now();
+    function frame(now) {{
+      var p = Math.min(1, (now - start) / duration);
+      var val = Math.round(ease(p) * target);
+      el.textContent = fmt ? fmt(val) : val.toLocaleString();
+      if (p < 1) requestAnimationFrame(frame);
+    }}
+    requestAnimationFrame(frame);
+  }}
+
+  function animateDonut() {{
+    var arc = grid.querySelector('.pie-arc'), pct = grid.querySelector('.pie-pct');
+    if (!arc || !pct) return;
+    var target = parseFloat(arc.dataset.target), circ = parseFloat(arc.dataset.circumference);
+    var targetPct = parseInt(pct.dataset.target, 10);
+    arc.setAttribute('stroke-dasharray', '0 ' + circ);
+    var start = performance.now(), duration = 1400;
+    function frame(now) {{
+      var p = Math.min(1, (now - start) / duration), e = ease(p);
+      arc.setAttribute('stroke-dasharray', (e * target).toFixed(2) + ' ' + circ);
+      pct.textContent = Math.round(e * targetPct) + '%';
+      if (p < 1) requestAnimationFrame(frame);
+    }}
+    requestAnimationFrame(frame);
+  }}
+
+  function animateBars() {{
+    grid.querySelectorAll('.bar[data-h]').forEach(function(bar) {{
+      var targetH = parseFloat(bar.dataset.h);
+      bar.style.height = '0px';
+      var start = performance.now(), duration = 1100;
+      function frame(now) {{
+        var p = Math.min(1, (now - start) / duration);
+        bar.style.height = (ease(p) * targetH).toFixed(1) + 'px';
+        if (p < 1) requestAnimationFrame(frame);
+      }}
+      requestAnimationFrame(frame);
+    }});
+    grid.querySelectorAll('.bar-val[data-val]').forEach(function(v) {{
+      animateNumber(v, parseInt(v.dataset.val, 10), 1100);
+    }});
+  }}
+
+  function animateBignum() {{
+    grid.querySelectorAll('.bn b[data-val]').forEach(function(b) {{
+      animateNumber(b, parseInt(b.dataset.val, 10), 1300, function(v) {{ return '$' + v.toLocaleString(); }});
+    }});
+  }}
+
+  var observer = new IntersectionObserver(function(entries) {{
+    entries.forEach(function(entry) {{
+      if (entry.isIntersecting) {{
+        animateDonut();
+        animateBars();
+        animateBignum();
+        observer.unobserve(entry.target);
+      }}
+    }});
+  }}, {{threshold: 0.35}});
+  observer.observe(grid);
+}})();
+</script>
 </body>
 </html>
 """

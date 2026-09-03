@@ -32,6 +32,7 @@ THEME_CSS = """
   --med:  #A67C00; --med-tint:  #FBF3DA;
   --low:  #47566B; --low-tint:  #EBEEF2;
   --ok:   #157A4F; --ok-tint:   #E4F5EC;
+  --border-strong: #9FB6B1;
   --shadow: 0 1px 2px rgba(18,24,26,0.06), 0 8px 24px rgba(18,24,26,0.05);
   /* liquid-glass surface tokens: translucent panels over an ambient gradient,
      not flat opaque cards -- see body's background-image below for the field
@@ -54,6 +55,7 @@ THEME_CSS = """
     --med:  #E3BE3D; --med-tint:  #362B0C;
     --low:  #9FB2C4; --low-tint:  #202A33;
     --ok:   #57D79A; --ok-tint:   #10301F;
+    --border-strong: #3D4E4B;
     --shadow: 0 1px 2px rgba(0,0,0,0.3), 0 8px 24px rgba(0,0,0,0.35);
     --glass: rgba(26,36,35,0.6); --glass-strong: rgba(26,36,35,0.8);
     --glass-border: rgba(255,255,255,0.10); --glass-sheen: rgba(255,255,255,0.10);
@@ -85,6 +87,22 @@ body {
 .mono, code { font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace; }
 a { color: var(--brand-dark); }
 :focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; border-radius: 3px; }
+.sr-only {
+  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden;
+  clip: rect(0,0,0,0); white-space: nowrap; border: 0;
+}
+
+/* One full-viewport "screen" per landing section, so a laptop-height window
+   shows exactly one section at a time instead of two-and-a-half at once.
+   min-height (not height) so a section with more content than fits one
+   screen still grows rather than clipping. Snap is proximity, not
+   mandatory, and off entirely under reduced-motion -- it should nudge
+   scrolling into place, never fight or disorient it. */
+.view { min-height: calc(100vh - 65px); display: flex; flex-direction: column; justify-content: center; }
+@media (prefers-reduced-motion: no-preference) {
+  html { scroll-snap-type: y proximity; }
+  .view { scroll-snap-align: start; }
+}
 
 .page { max-width: 640px; margin: 0 auto; padding: 60px 24px; }
 .page.with-site-header { padding-top: 44px; }
@@ -128,17 +146,64 @@ h2 { font-family: "Newsreader", Georgia, serif; font-weight: 600; font-size: 21p
 .site-footer a { color: var(--muted); text-decoration: none; }
 .site-footer a:hover { color: var(--brand-dark); }
 
-/* ---- landing v2: scanner-forward layout ---- */
-.ribbon {
-  background: var(--glass); border-bottom: 1px solid var(--glass-border);
-  backdrop-filter: blur(16px) saturate(150%); -webkit-backdrop-filter: blur(16px) saturate(150%);
-  padding: 14px 24px; text-align: center;
+/* ---- landing v3: Google-style hero, one clean scan bar, no card chrome ---- */
+.hero-block { max-width: 640px; margin: 0 auto; padding: 24px 24px 40px; text-align: center; }
+.hero-title {
+  font-size: 52px; font-weight: 600; letter-spacing: -0.015em; margin: 0 0 14px;
+  text-wrap: balance;
 }
-.ribbon p { margin: 0; font-family: "Newsreader", Georgia, serif; font-weight: 600; font-size: 18px; color: var(--ink); }
-.scan-section { max-width: 720px; margin: 0 auto; padding: 44px 24px 8px; }
-.scan-card-head { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; flex-wrap: wrap; margin-bottom: 18px; }
-.scan-card-head h1 { font-size: 26px; margin: 0; }
-.mad-lockup.centered { text-align: center; margin: 30px auto 0; }
+.hero-title-mark { font-weight: 800; color: var(--brand-dark); }
+.hero-tagline { font-family: "Newsreader", Georgia, serif; font-weight: 500; font-size: 20px; color: var(--ink-soft); margin: 0; }
+
+.scan-section { max-width: 640px; margin: 0 auto; padding: 0 24px 8px; }
+.scan-bar {
+  display: flex; align-items: stretch; gap: 4px;
+  background: var(--glass-strong); border: 1px solid var(--glass-border); border-radius: 999px;
+  padding: 6px 6px 6px 26px; box-shadow: var(--glass-shadow);
+  backdrop-filter: blur(28px) saturate(160%); -webkit-backdrop-filter: blur(28px) saturate(160%);
+}
+.scan-bar input {
+  border: none; background: transparent; padding: 12px 4px; font-size: 15.5px; font-family: inherit;
+  color: var(--ink); outline: none; margin: 0; border-radius: 0; width: auto;
+}
+.scan-bar input::placeholder { color: var(--muted); }
+.scan-bar-url { flex: 1 1 auto; min-width: 0; }
+.scan-bar-email-wrap {
+  display: flex; align-items: center; flex: 0 1 220px; min-width: 0;
+  border-left: 1px solid var(--glass-border); padding-left: 16px;
+}
+.scan-bar-email { flex: 1 1 auto; min-width: 0; }
+.scan-bar-btn { flex: 0 0 auto; border-radius: 999px !important; padding: 12px 22px !important; white-space: nowrap; }
+@media (max-width: 640px) {
+  .hero-title { font-size: 38px; }
+  .scan-bar { flex-direction: column; align-items: stretch; border-radius: 22px; padding: 16px; gap: 2px; }
+  .scan-bar input { padding: 10px 2px; }
+  .scan-bar-email-wrap { border-left: none; border-top: 1px solid var(--glass-border); padding-left: 2px; padding-top: 12px; margin-top: 6px; }
+  .scan-bar-btn { width: 100%; justify-content: center; margin-top: 10px; }
+}
+
+/* tooltip: replaces a permanently-visible sentence of fine print next to
+   the email field. Shows on hover AND focus (not hover-only) so it's
+   reachable by keyboard, and the input itself carries the same text via
+   aria-describedby so a screen reader user gets it without needing to
+   trigger the tooltip at all. */
+.info-tip { position: relative; display: inline-flex; flex: 0 0 auto; margin-left: 4px; }
+.tip-icon {
+  width: 20px; height: 20px; border-radius: 50%; flex-shrink: 0;
+  background: var(--surface-alt); border: 1px solid var(--border-strong); color: var(--muted);
+  font-size: 11px; font-weight: 700; font-family: "JetBrains Mono", monospace;
+  display: flex; align-items: center; justify-content: center; cursor: help;
+}
+.tip-text {
+  position: absolute; bottom: calc(100% + 10px); right: -10px; width: 240px;
+  background: var(--ink); color: var(--surface); font-size: 12.5px; line-height: 1.5; font-weight: 500;
+  padding: 11px 13px; border-radius: 10px; box-shadow: var(--shadow); text-align: left;
+  opacity: 0; transform: translateY(4px); pointer-events: none; transition: opacity 0.15s ease, transform 0.15s ease;
+  z-index: 5;
+}
+.info-tip:hover .tip-text, .info-tip:focus-within .tip-text { opacity: 1; transform: translateY(0); }
+
+.mad-lockup.centered { text-align: center; margin: 26px auto 0; }
 
 .section { max-width: 980px; margin: 0 auto; padding: 56px 24px; }
 .section-head { text-align: center; margin-bottom: 36px; }
@@ -171,28 +236,30 @@ h2 { font-family: "Newsreader", Georgia, serif; font-weight: 600; font-size: 21p
 .how-arrow { align-self: center; color: var(--border-strong); font-size: 22px; margin-top: 70px; }
 @media (max-width: 760px) { .how-arrow { display: none; } }
 
-/* why it matters: charts */
-.stats-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 24px; align-items: stretch; margin-bottom: 40px; }
-@media (max-width: 760px) { .stats-grid { grid-template-columns: 1fr; } }
-.stat-panel {
-  text-align: center; background: var(--glass-strong); border: 1px solid var(--glass-border); border-radius: 18px;
-  box-shadow: var(--glass-shadow); padding: 28px 20px;
-  backdrop-filter: blur(28px) saturate(160%); -webkit-backdrop-filter: blur(28px) saturate(160%);
+/* why it matters: charts presented as one integrated data strip, not
+   three separate dashboard widgets -- a divider between columns instead
+   of a card boundary around each, so the ambient background stays visible
+   and the numbers themselves carry the weight instead of a box around them. */
+.stats-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0; align-items: stretch; margin-bottom: 44px; }
+.stat-panel { text-align: center; padding: 8px 28px; }
+.stat-panel + .stat-panel { border-left: 1px solid var(--glass-border); }
+@media (max-width: 760px) {
+  .stats-grid { grid-template-columns: 1fr; gap: 36px; }
+  .stat-panel + .stat-panel { border-left: none; border-top: 1px solid var(--glass-border); padding-top: 36px; }
 }
-.stat-panel .panel-label { font-family: "JetBrains Mono", monospace; font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); margin-bottom: 14px; }
 .pie-figure { display: flex; flex-direction: column; align-items: center; }
-.pie-figure .pie-caption { margin-top: 12px; font-size: 13px; color: var(--ink-soft); }
-.bar-figure { display: flex; align-items: flex-end; justify-content: center; gap: 28px; height: 140px; margin-bottom: 12px; }
+.pie-figure .pie-caption { margin-top: 14px; font-size: 13.5px; color: var(--ink-soft); }
+.bar-figure { display: flex; align-items: flex-end; justify-content: center; gap: 32px; height: 168px; margin-bottom: 14px; }
 .bar-figure .bar-col { display: flex; flex-direction: column; align-items: center; justify-content: flex-end; height: 100%; }
-.bar-figure .bar { width: 44px; border-radius: 6px 6px 0 0; }
-.bar-figure .bar-val { font-family: "JetBrains Mono", monospace; font-size: 12.5px; font-weight: 700; margin-bottom: 6px; }
+.bar-figure .bar { width: 48px; border-radius: 7px 7px 0 0; transition: height 0.2s linear; }
+.bar-figure .bar-val { font-family: "JetBrains Mono", monospace; font-size: 13.5px; font-weight: 700; margin-bottom: 6px; font-variant-numeric: tabular-nums; }
 .bar-figure .bar-lbl { font-size: 11.5px; color: var(--muted); margin-top: 8px; }
-.bignum-figure { display: flex; align-items: center; justify-content: center; gap: 18px; height: 140px; }
+.bignum-figure { display: flex; align-items: center; justify-content: center; gap: 20px; height: 168px; }
 .bignum-figure .bn { text-align: center; }
-.bignum-figure .bn b { display: block; font-family: "Newsreader", Georgia, serif; font-size: 34px; line-height: 1; }
+.bignum-figure .bn b { display: block; font-family: "Newsreader", Georgia, serif; font-size: 42px; line-height: 1; font-variant-numeric: tabular-nums; }
 .bignum-figure .bn.bad b { color: var(--crit); }
 .bignum-figure .bn.good b { color: var(--brand-dark); }
-.bignum-figure .bn span { font-size: 11.5px; color: var(--muted); display: block; margin-top: 6px; }
+.bignum-figure .bn span { font-size: 11.5px; color: var(--muted); display: block; margin-top: 8px; }
 .bignum-figure .vs { color: var(--muted); font-size: 12px; font-family: "JetBrains Mono", monospace; }
 .stats-quote {
   max-width: 640px; margin: 0 auto; text-align: center; font-family: "Newsreader", Georgia, serif;
@@ -228,10 +295,10 @@ h2 { font-family: "Newsreader", Georgia, serif; font-weight: 600; font-size: 21p
 .mad-lockup .sub { display: block; font-size: 12px; color: var(--muted); margin-top: 2px; }
 @media (max-width: 860px) { .hero-split { grid-template-columns: 1fr; } .hero-shot img { transform: none; } }
 .hero-eyebrow {
-  display: inline-flex; align-items: center; gap: 7px; font-family: "JetBrains Mono", monospace;
-  font-size: 11.5px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--brand-dark);
-  background: var(--glass); border: 1px solid var(--brand); border-radius: 999px; padding: 5px 13px 5px 10px;
-  margin-bottom: 18px; max-width: 100%;
+  display: inline-flex; align-items: center; gap: 6px; font-family: "JetBrains Mono", monospace;
+  font-size: 10px; letter-spacing: 0.05em; text-transform: uppercase; color: var(--brand-dark);
+  background: var(--glass); border: 1px solid var(--brand); border-radius: 999px; padding: 4px 11px 4px 9px;
+  margin-bottom: 16px; max-width: 100%;
   backdrop-filter: blur(12px) saturate(150%); -webkit-backdrop-filter: blur(12px) saturate(150%);
 }
 .hero-eyebrow-text { min-width: 0; white-space: normal; }
