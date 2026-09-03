@@ -1,0 +1,39 @@
+# Environment / secrets — never commit real credentials
+.env
+.env.*
+*.tfvars
+terraform.tfstate*
+.terraform/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+*.egg-info/
+
+# Generated output -- local copies of reports from run_scan.py, not source
+reports/
+
+# Internal planning/notes -- kept locally, never pushed to the public repo
+# (only code and setup instructions belong on GitHub). If a file needs to
+# move back to GitHub later, un-ignore it explicitly rather than removing
+# this whole block.
+REQUIREMENTS.md
+PLAN.md
+WORKFLOW_BASELINE.md
+PRODUCT_OVERVIEW.md
+SUBMISSION_TEXT.md
+MASTER_CONTEXT.md
+VIDEO_SCRIPT.md
+architecture_diagrams/
+
+# Claude Code local session state
+.claude/
+
+# OS
+.DS_Store
+
+# IDE
+.vscode/
+.idea/

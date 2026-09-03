@@ -1,0 +1,363 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MAD Platform Architecture</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600;9..144,700&family=Public+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg: #f2f4f2; --surface: #ffffff; --ink: #14181a; --ink-soft: #52605c;
+  --border: #dde3e0; --border-strong: #c7d0cc;
+  --agent: #0d6e5c; --agent-tint: #e6f2ef;
+  --infra: #3f5568; --infra-tint: #e7ecf0;
+  --data: #a15c1f; --data-tint: #f7ecdf;
+  --external: #6c4fb0; --external-tint: #efeafa;
+  --human: #b5432f; --human-tint: #fbeae6;
+  --muted-stroke: #b7c0bc; --muted-text: #8b968f;
+  --shadow: 0 1px 2px rgba(20,24,26,0.04), 0 6px 16px rgba(20,24,26,0.05);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #12181a; --surface: #1a2225; --ink: #eef2ef; --ink-soft: #a9b6b1;
+    --border: #2c3a37; --border-strong: #3c4d49;
+    --agent: #4fd9b8; --agent-tint: #16332c;
+    --infra: #9fb3c8; --infra-tint: #202b34;
+    --data: #e0a052; --data-tint: #3a2a15;
+    --external: #b39ce8; --external-tint: #2a2440;
+    --human: #e2735c; --human-tint: #3a2019;
+    --muted-stroke: #3c4a46; --muted-text: #5f6b67;
+    --shadow: 0 1px 2px rgba(0,0,0,0.35), 0 8px 20px rgba(0,0,0,0.35);
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #12181a; --surface: #1a2225; --ink: #eef2ef; --ink-soft: #a9b6b1;
+  --border: #2c3a37; --border-strong: #3c4d49;
+  --agent: #4fd9b8; --agent-tint: #16332c;
+  --infra: #9fb3c8; --infra-tint: #202b34;
+  --data: #e0a052; --data-tint: #3a2a15;
+  --external: #b39ce8; --external-tint: #2a2440;
+  --human: #e2735c; --human-tint: #3a2019;
+  --muted-stroke: #3c4a46; --muted-text: #5f6b67;
+  --shadow: 0 1px 2px rgba(0,0,0,0.35), 0 8px 20px rgba(0,0,0,0.35);
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body {
+  background: var(--bg); color: var(--ink);
+  font-family: "Public Sans", -apple-system, "Segoe UI", sans-serif;
+  line-height: 1.5; padding: 48px 20px 90px;
+}
+.mono { font-family: "JetBrains Mono", monospace; }
+.page { max-width: 1180px; margin: 0 auto; }
+header { margin-bottom: 24px; }
+.eyebrow {
+  font-family: "JetBrains Mono", monospace; font-size: 12px; letter-spacing: 0.09em;
+  text-transform: uppercase; color: var(--agent); font-weight: 600; margin-bottom: 10px;
+}
+h1 {
+  font-family: "Fraunces", Georgia, serif; font-size: 32px; font-weight: 600;
+  margin: 0 0 10px; text-wrap: balance; letter-spacing: -0.01em;
+}
+h2 {
+  font-family: "Fraunces", Georgia, serif; font-size: 22px; font-weight: 600;
+  margin: 0 0 6px; letter-spacing: -0.01em;
+}
+.dek { color: var(--ink-soft); font-size: 15px; max-width: 78ch; }
+.legend {
+  display: flex; flex-wrap: wrap; gap: 8px 18px; margin: 20px 0 20px;
+  padding: 14px 18px; background: var(--surface); border: 1px solid var(--border);
+  border-radius: 10px; box-shadow: var(--shadow); font-size: 12.5px;
+}
+.legend-item { display: flex; align-items: center; gap: 7px; color: var(--ink-soft); }
+.legend-dot { width: 10px; height: 10px; border-radius: 3px; flex-shrink: 0; }
+.diagram-frame {
+  background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
+  padding: 18px; box-shadow: var(--shadow); overflow-x: auto;
+}
+.diagram-frame img { max-width: 100%; height: auto; display: block; margin: 0 auto; border-radius: 6px; }
+figcaption { margin-top: 10px; font-size: 13px; color: var(--ink-soft); text-align: center; }
+.diagram-links { margin-top: 8px; font-size: 12.5px; color: var(--ink-soft); text-align: center; }
+.diagram-links a { color: inherit; }
+
+/* ---- prose walkthrough, restored from the pre-diagram text version ---- */
+.walkthrough { margin-top: 52px; }
+.walkthrough > .dek { margin-bottom: 28px; }
+.zone {
+  border: 1px dashed var(--border-strong);
+  border-radius: 16px;
+  padding: 28px 24px 24px;
+  margin-bottom: 28px;
+  position: relative;
+}
+.zone-label {
+  position: absolute; top: -12px; left: 20px;
+  background: var(--bg); padding: 0 10px;
+  font-family: "JetBrains Mono", monospace; font-size: 12px; font-weight: 600;
+  letter-spacing: 0.05em; text-transform: uppercase; color: var(--ink-soft);
+}
+.zone-note { font-size: 13px; color: var(--ink-soft); margin: -8px 0 20px; max-width: 68ch; }
+
+.trigger-row { display: flex; gap: 14px; flex-wrap: wrap; }
+.trigger {
+  flex: 1; min-width: 200px; border-radius: 10px; padding: 14px 16px;
+  border: 1px solid var(--border); background: var(--surface);
+}
+.trigger.active { border-color: var(--agent); box-shadow: 0 0 0 1px var(--agent) inset; }
+.trigger .label { font-weight: 600; font-size: 14px; margin-bottom: 3px; }
+.trigger .desc { font-size: 12.5px; color: var(--ink-soft); }
+.trigger .tag {
+  display: inline-block; font-family: "JetBrains Mono", monospace; font-size: 10px;
+  letter-spacing: 0.04em; text-transform: uppercase; padding: 2px 7px; border-radius: 5px;
+  margin-top: 8px; font-weight: 600; background: var(--agent-tint); color: var(--agent);
+}
+
+.pipeline { display: flex; flex-direction: column; gap: 0; }
+.step-row { display: flex; align-items: stretch; gap: 18px; }
+.step-connector { display: flex; flex-direction: column; align-items: center; width: 22px; flex-shrink: 0; }
+.step-connector .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--agent); margin-top: 22px; flex-shrink: 0; }
+.step-connector .line { width: 2px; flex: 1; background: var(--border-strong); margin-top: 4px; }
+.step-row:last-child .step-connector .line { display: none; }
+
+.step-card {
+  flex: 1; background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
+  padding: 16px 18px; margin-bottom: 16px; box-shadow: var(--shadow); position: relative;
+}
+.step-card.tool { border-left: 4px solid var(--infra); }
+.step-card.agent { border-left: 4px solid var(--agent); }
+.step-card.human { border-left: 4px solid var(--human); }
+
+.step-head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+.step-title { font-weight: 700; font-size: 15.5px; }
+.step-kind {
+  font-family: "JetBrains Mono", monospace; font-size: 10.5px; letter-spacing: 0.04em;
+  text-transform: uppercase; font-weight: 600; padding: 2px 8px; border-radius: 5px; white-space: nowrap;
+}
+.step-kind.agent { background: var(--agent-tint); color: var(--agent); }
+.step-kind.tool { background: var(--infra-tint); color: var(--infra); }
+.step-kind.human { background: var(--human-tint); color: var(--human); }
+
+.step-desc { font-size: 13.5px; color: var(--ink-soft); margin-top: 6px; max-width: 62ch; }
+
+.lens-tags { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 10px; }
+.lens-tag {
+  font-size: 10.5px; font-family: "JetBrains Mono", monospace; padding: 3px 8px; border-radius: 999px;
+  border: 1px solid var(--border-strong); color: var(--ink-soft); letter-spacing: 0.02em;
+}
+
+.branch-group { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-top: 10px; }
+.branch-item { background: var(--infra-tint); border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; font-size: 12px; color: var(--ink); }
+.branch-item b { display: block; font-size: 12.5px; margin-bottom: 2px; }
+
+.route-split { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-top: 4px; }
+
+.loop-diagram { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 8px; }
+.loop-node {
+  background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
+  padding: 10px 12px; font-size: 12.5px; flex: 1; min-width: 130px; text-align: center;
+}
+.loop-node.decision { border-color: var(--human); background: var(--human-tint); }
+.loop-arrow { color: var(--ink-soft); font-size: 16px; flex-shrink: 0; }
+
+.infra-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; }
+.infra-item { background: var(--infra-tint); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; }
+.infra-item .name { font-family: "JetBrains Mono", monospace; font-size: 12.5px; font-weight: 600; color: var(--infra); }
+.infra-item .role { font-size: 11.5px; color: var(--ink-soft); margin-top: 2px; }
+
+footer { margin-top: 24px; font-size: 12.5px; color: var(--ink-soft); font-family: "JetBrains Mono", monospace; }
+
+@media (max-width: 640px) {
+  .branch-group { grid-template-columns: 1fr; }
+  .route-split { grid-template-columns: 1fr; }
+  h1 { font-size: 26px; }
+}
+</style>
+</head>
+<body>
+
+<div class="page">
+<header>
+  <div class="eyebrow">System Architecture</div>
+  <h1>MAD Platform</h1>
+  <div class="dek">The full system in one picture. Walkthrough below.</div>
+</header>
+
+<div class="legend">
+  <div class="legend-item"><span class="legend-dot" style="background:#cfe4fb"></span>Lane 1 &mdash; Client &amp; SME queues</div>
+  <div class="legend-item"><span class="legend-dot" style="background:#fbdfb8"></span>Lane 2 &mdash; Core review pipeline (live)</div>
+  <div class="legend-item"><span class="legend-dot" style="background:#c3ecd7"></span>Lane 3 &mdash; Databases &amp; platform ecosystem</div>
+  <div class="legend-item"><span class="legend-dot" style="background:#d3cdf7"></span>Lane 4 &mdash; Parallel async self-improvement loops</div>
+</div>
+
+<figure>
+<div class="diagram-frame">
+<img src="architecture-diagram.svg" alt="MAD Platform architecture diagram, four lanes. Lane 1: a Live Web App URL entry point, and an SME Central Review Hub with three sub-queues (Live Review Queue for low-confidence triage, Structural Review, Prompt Review Queue for pattern approvals). Lane 2, the core live pipeline: Orchestrator Agent fans out to Analyst Agent's three parallel checks (Rule Checks, Visual AI, Semantic AI), which merge into Editor Agent, then a Retry Gate capped at one pass, then Reporter Agent, then a Route and Act escalation gate that either goes to Action Agent directly (high confidence) or to the SME Live Review Queue (low confidence); Action Agent files Jira tickets and posts Slack notifications. Lane 3: Cloud Storage for HTML reports and Firestore for async status logs. Lane 4: two scheduled loops, a daily WCAG freshness check (fetch current WCAG version, classify the change, auto-refresh the vector knowledge base) and a weekly Cloud Run Job running a self-hosted Gemma model that mines dismissal patterns, checks them against existing patterns, and once an SME approves, grounds Editor Agent's prompt with the optimized rules.">
+</div>
+<div class="diagram-links"><a href="architecture-diagram.svg">Open full-resolution SVG</a> &middot; <a href="architecture-diagram.png">PNG</a></div>
+</figure>
+
+<div class="walkthrough">
+<h2>How it works</h2>
+<div class="dek">The diagram above shows the mechanism; this section walks through why each piece exists.</div>
+
+<div class="zone">
+  <div class="zone-label">Entry point</div>
+  <div class="trigger-row">
+    <div class="trigger active">
+      <div class="label">Web app: scan a site on demand</div>
+      <div class="desc">A URL submitted through the live front end kicks off a Review Cycle directly.</div>
+      <span class="tag">Live</span>
+    </div>
+  </div>
+</div>
+
+<div class="zone">
+  <div class="zone-label">Review Cycle</div>
+  <div class="zone-note">Sequential where order matters, parallel where it doesn't, dynamic delegation only at genuine judgment points.</div>
+
+  <div class="pipeline">
+
+    <div class="step-row">
+      <div class="step-connector"><div class="dot"></div><div class="line"></div></div>
+      <div class="step-card agent">
+        <div class="step-head">
+          <span class="step-title">Orchestrator: select pages</span>
+          <span class="step-kind agent">agent</span>
+        </div>
+        <div class="step-desc">Fetches the entry page, reads nav links, decides which pages carry real risk (forms, checkout, account flows): a bounded, justified subset, not exhaustive crawling.</div>
+        <div class="lens-tags"><span class="lens-tag">orchestration: dynamic delegation</span></div>
+      </div>
+    </div>
+
+    <div class="step-row">
+      <div class="step-connector"><div class="dot"></div><div class="line"></div></div>
+      <div class="step-card tool">
+        <div class="step-head">
+          <span class="step-title">Analyst: parallel per-page checks</span>
+          <span class="step-kind tool">tool + agent</span>
+        </div>
+        <div class="step-desc">Independent checks with no ordering dependency, run concurrently. Tuned high-recall: over-flagging is acceptable, missing a real violation is not.</div>
+        <div class="branch-group">
+          <div class="branch-item"><b>Rule checks</b>contrast, alt text, headings, labels, ARIA, tab order</div>
+          <div class="branch-item"><b>Visual AI</b>screenshot review: focus indicators, visual contrast</div>
+          <div class="branch-item"><b>Semantic AI</b>grounded in the WCAG knowledge base below</div>
+        </div>
+        <div class="lens-tags"><span class="lens-tag">orchestration: parallel fan-out</span></div>
+      </div>
+    </div>
+
+    <div class="step-row">
+      <div class="step-connector"><div class="dot"></div><div class="line"></div></div>
+      <div class="step-card agent">
+        <div class="step-head">
+          <span class="step-title">Editor: independent verification</span>
+          <span class="step-kind agent">agent</span>
+        </div>
+        <div class="step-desc">Re-checks every flag against the underlying evidence. Dismisses false positives with a documented reason; assigns a validated confidence score to what survives.</div>
+      </div>
+    </div>
+
+    <div class="step-row">
+      <div class="step-connector"><div class="dot"></div><div class="line"></div></div>
+      <div class="step-card agent">
+        <div class="step-head">
+          <span class="step-title">Orchestrator: retry gate</span>
+          <span class="step-kind agent">agent</span>
+        </div>
+        <div class="step-desc">"Good enough, or one more pass?" Capped at exactly one retry: a bounded loop, not open-ended.</div>
+        <div class="lens-tags"><span class="lens-tag">feedback loop: bounded</span></div>
+      </div>
+    </div>
+
+    <div class="step-row">
+      <div class="step-connector"><div class="dot"></div><div class="line"></div></div>
+      <div class="step-card agent">
+        <div class="step-head">
+          <span class="step-title">Reporter: rank and draft</span>
+          <span class="step-kind agent">agent</span>
+        </div>
+        <div class="step-desc">Ranks confirmed findings by real-world risk (WCAG level, litigation pattern frequency, user impact) and drafts the styled report against one fixed template.</div>
+      </div>
+    </div>
+
+    <div class="step-row">
+      <div class="step-connector"><div class="dot"></div></div>
+      <div class="step-card">
+        <div class="step-head">
+          <span class="step-title">Orchestrator: route and act</span>
+        </div>
+        <div class="step-desc">One escalation gate: low confidence or critical severity routes to a human; everything else is fully autonomous.</div>
+        <div class="route-split">
+          <div class="branch-item" style="background:var(--infra-tint)"><b>Action Agent</b>Files a real Jira ticket automatically. Idempotent: a retried step never double-files.<div class="lens-tags"><span class="lens-tag">idempotency</span></div></div>
+          <div class="branch-item" style="background:var(--human-tint)"><b>SME Central Review Hub</b>Confirm &rarr; files the ticket, live-updates the report the customer already has open. Dismiss &rarr; never becomes a ticket. The same hub also holds WCAG version-change and pattern-approval requests from the two loops below.<div class="lens-tags"><span class="lens-tag">human approval</span></div></div>
+        </div>
+        <div class="step-desc" style="margin-top:10px">Both paths post to <b>Slack</b>: a real-time alert when something's escalated, a summary when the scan completes.</div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<div class="zone">
+  <div class="zone-label">Memory: WCAG knowledge base</div>
+  <div class="zone-note">Grounds Analyst and Editor's citations against the real standard instead of the model's unaided claim, and stays current on its own.</div>
+  <div class="loop-diagram">
+    <div class="loop-node mono">Cloud Scheduler tick, daily</div>
+    <div class="loop-arrow">&rarr;</div>
+    <div class="loop-node mono">Fetch current WCAG version</div>
+    <div class="loop-arrow">&rarr;</div>
+    <div class="loop-node decision mono">Classify: minor or major?</div>
+    <div class="loop-arrow">&rarr;</div>
+    <div class="loop-node mono">Auto-refresh <span style="color:var(--ink-soft)">or</span> escalate to SME Central Review Hub</div>
+  </div>
+  <div class="lens-tags" style="margin-top:14px"><span class="lens-tag">memory / vector search</span><span class="lens-tag">feedback loop: self-heal</span><span class="lens-tag">human approval on structural change</span></div>
+</div>
+
+<div class="zone">
+  <div class="zone-label">Memory: Analyst/Editor's own judgment</div>
+  <div class="zone-note">Distinct from the knowledge base above: that loop keeps reference material current, this one tunes the pipeline's own behavior from its real history. A self-hosted Gemma, not Vertex AI: a background batch job with no live-request latency, exactly the workload Gemma's on-device design targets.</div>
+  <div class="loop-diagram">
+    <div class="loop-node mono">Editor's dismissal history</div>
+    <div class="loop-arrow">&rarr;</div>
+    <div class="loop-node mono">Weekly Scheduler tick</div>
+    <div class="loop-arrow">&rarr;</div>
+    <div class="loop-node mono">Cloud Run Job: self-hosted Gemma</div>
+    <div class="loop-arrow">&rarr;</div>
+    <div class="loop-node decision mono">Consistent pattern?</div>
+    <div class="loop-arrow">&rarr;</div>
+    <div class="loop-node mono">SME Central Review Hub</div>
+  </div>
+  <div class="step-desc" style="margin-top:10px">Confirmed &rarr; grounds Editor's prompt on every future scan.</div>
+  <div class="lens-tags" style="margin-top:14px"><span class="lens-tag">persistent memory</span><span class="lens-tag">feedback loop: self-improving</span><span class="lens-tag">human approval before judgment changes</span><span class="lens-tag">Gemma, self-hosted</span></div>
+</div>
+
+<div class="zone">
+  <div class="zone-label">Resumability</div>
+  <div class="zone-note">Every stage above checkpoints its completion to Firestore as it finishes. A restart, whether a crash or a redeploy, reads the last completed checkpoint and resumes from the next incomplete stage. It never blindly restarts from the top, and never assumes a stage completed just because the job record exists.</div>
+  <div class="lens-tags"><span class="lens-tag">resumability</span><span class="lens-tag">crash-safe by design</span></div>
+</div>
+
+<div class="zone">
+  <div class="zone-label">Google Cloud infrastructure</div>
+  <div class="infra-grid">
+    <div class="infra-item"><div class="name">Cloud Run</div><div class="role">2 scale-to-zero services + 1 Job, least-privilege per service</div></div>
+    <div class="infra-item"><div class="name">Google ADK</div><div class="role">LlmAgent + Runner wraps every real-time Gemini call</div></div>
+    <div class="infra-item"><div class="name">Vertex AI &middot; Gemini</div><div class="role">Flash-lite for volume, Flash for judgment calls</div></div>
+    <div class="infra-item"><div class="name">Ollama &middot; Gemma</div><div class="role">Self-hosted on the pattern-miner Job, the one background call, not real-time</div></div>
+    <div class="infra-item"><div class="name">Firestore</div><div class="role">Job checkpoints, findings, escalations, KB version, learned patterns</div></div>
+    <div class="infra-item"><div class="name">Cloud Storage</div><div class="role">Generated HTML reports</div></div>
+    <div class="infra-item"><div class="name">Cloud Scheduler</div><div class="role">WCAG freshness tick (daily), Gemma pattern-miner (weekly)</div></div>
+    <div class="infra-item"><div class="name">Secret Manager</div><div class="role">Access codes, Jira + Slack credentials</div></div>
+    <div class="infra-item"><div class="name">Jira Cloud</div><div class="role">Real ticket filing, not a mock sink in production</div></div>
+    <div class="infra-item"><div class="name">Slack</div><div class="role">Real-time escalation alerts, scan-complete summaries</div></div>
+    <div class="infra-item"><div class="name">Playwright</div><div class="role">Headless render, screenshot, computed styles</div></div>
+  </div>
+</div>
+</div>
+
+<footer>MAD Platform &middot; All Things Agentic Hackathon &middot; <a href="https://github.com/pandayv/mad-platform" style="color:inherit">github.com/pandayv/mad-platform</a></footer>
+</div>
+</body>
+</html>
