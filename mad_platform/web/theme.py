@@ -17,7 +17,8 @@ import math
 
 FONT_LINK = (
     '<link rel="preconnect" href="https://fonts.googleapis.com">'
-    '<link href="https://fonts.googleapis.com/css2?family=Public+Sans:ital,wght@0,400;0,500;0,600;0,700;0,800;'
+    '<link href="https://fonts.googleapis.com/css2?family=Newsreader:ital,opsz,wght@0,6..72,500;0,6..72,600;'
+    '0,6..72,700;1,6..72,500&family=Public+Sans:ital,wght@0,400;0,500;0,600;0,700;0,800;'
     '1,400&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">'
 )
 
@@ -57,12 +58,75 @@ a { color: var(--brand-dark); }
 :focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; border-radius: 3px; }
 
 .page { max-width: 640px; margin: 0 auto; padding: 60px 24px; }
+.page.with-site-header { padding-top: 44px; }
 .page.wide { max-width: 900px; }
-.brand { font-size: 12px; letter-spacing: 0.09em; text-transform: uppercase; color: var(--brand-dark); font-weight: 800; margin-bottom: 8px; display: flex; align-items: center; gap: 7px; }
-.brand .dot-b { width: 7px; height: 7px; border-radius: 50%; background: var(--brand); flex-shrink: 0; }
-h1 { font-size: 28px; margin: 0 0 8px; letter-spacing: -0.01em; text-wrap: balance; word-break: break-word; }
+.serif { font-family: "Newsreader", Georgia, serif; }
+h1 { font-family: "Newsreader", Georgia, serif; font-weight: 600; font-size: 32px; margin: 0 0 10px; letter-spacing: -0.01em; text-wrap: balance; word-break: break-word; }
+h2 { font-family: "Newsreader", Georgia, serif; font-weight: 600; font-size: 21px; margin: 0 0 10px; letter-spacing: -0.005em; }
 .tagline { color: var(--muted); font-size: 15px; margin-bottom: 32px; }
 .card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 28px; box-shadow: var(--shadow); }
+
+/* ---- site-wide header + footer, every page shell uses these ---- */
+.brand { font-size: 12px; letter-spacing: 0.09em; text-transform: uppercase; color: var(--brand-dark); font-weight: 800; display: flex; align-items: center; gap: 7px; }
+.brand .dot-b { width: 7px; height: 7px; border-radius: 50%; background: var(--brand); flex-shrink: 0; box-shadow: 0 0 0 3px var(--brand-tint); }
+.site-header {
+  border-bottom: 1px solid var(--border); background: var(--surface);
+}
+.site-header-inner {
+  max-width: 900px; margin: 0 auto; padding: 18px 24px;
+  display: flex; align-items: center; justify-content: space-between; gap: 20px; flex-wrap: wrap;
+}
+.site-header-inner a.brand { text-decoration: none; }
+.site-nav { display: flex; align-items: center; gap: 22px; list-style: none; margin: 0; padding: 0; }
+.site-nav a { color: var(--ink-soft); text-decoration: none; font-size: 13.5px; font-weight: 600; }
+.site-nav a:hover { color: var(--brand-dark); }
+.site-nav a.active { color: var(--brand-dark); }
+.site-nav a.cta { background: var(--brand); color: #fff; padding: 8px 16px; border-radius: 7px; }
+.site-nav a.cta:hover { opacity: 0.92; color: #fff; }
+.site-footer { border-top: 1px solid var(--border); margin-top: 64px; }
+.site-footer-inner {
+  max-width: 900px; margin: 0 auto; padding: 28px 24px 40px;
+  display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap;
+  font-size: 12.5px; color: var(--muted);
+}
+.site-footer nav { display: flex; gap: 18px; flex-wrap: wrap; }
+.site-footer a { color: var(--muted); text-decoration: none; }
+.site-footer a:hover { color: var(--brand-dark); }
+
+/* ---- landing hero ---- */
+.hero-band {
+  background:
+    radial-gradient(ellipse 900px 420px at 15% -10%, var(--brand-tint), transparent),
+    var(--bg);
+  border-bottom: 1px solid var(--border);
+  position: relative; overflow: hidden;
+}
+.hero-band::after {
+  /* the "scan line" -- a quiet nod to what the tool actually does, not decoration for its own sake */
+  content: ""; position: absolute; left: 0; right: 0; height: 2px;
+  background: linear-gradient(90deg, transparent, var(--brand), transparent);
+  animation: scan-sweep 5s ease-in-out infinite; opacity: 0.55;
+}
+@media (prefers-reduced-motion: reduce) { .hero-band::after { animation: none; top: 40%; } }
+@keyframes scan-sweep { 0%, 100% { top: 8%; } 50% { top: 92%; } }
+.hero-inner { max-width: 900px; margin: 0 auto; padding: 56px 24px 48px; position: relative; }
+.hero-eyebrow {
+  display: inline-flex; align-items: center; gap: 7px; font-family: "JetBrains Mono", monospace;
+  font-size: 11.5px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--brand-dark);
+  background: var(--brand-tint); border: 1px solid var(--brand); border-radius: 999px; padding: 5px 13px 5px 10px;
+  margin-bottom: 18px;
+}
+.hero-inner h1 { font-size: 40px; max-width: 18ch; margin-bottom: 16px; }
+.hero-lede { font-family: "Newsreader", Georgia, serif; font-style: italic; font-size: 19px; line-height: 1.55; color: var(--ink-soft); max-width: 58ch; margin-bottom: 0; }
+.stat-row { display: flex; gap: 28px; flex-wrap: wrap; margin-top: 32px; }
+.stat-row .stat b { display: block; font-family: "Newsreader", Georgia, serif; font-size: 26px; color: var(--brand-dark); line-height: 1; }
+.stat-row .stat span { font-size: 12px; color: var(--muted); }
+.how-row { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; margin: 40px 0 8px; }
+.how-card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 18px 20px; }
+.how-card .step-n { font-family: "JetBrains Mono", monospace; font-size: 11px; color: var(--brand-dark); font-weight: 700; margin-bottom: 8px; }
+.how-card h3 { font-size: 14.5px; margin: 0 0 6px; font-weight: 700; }
+.how-card p { font-size: 12.5px; color: var(--muted); margin: 0; line-height: 1.5; }
+@media (max-width: 680px) { .how-row { grid-template-columns: 1fr; } .hero-inner h1 { font-size: 32px; } }
 
 label.f-label { display: block; font-size: 11.5px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); font-weight: 700; margin-bottom: 6px; }
 input[type=url], input[type=password] {

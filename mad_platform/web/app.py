@@ -87,6 +87,36 @@ def _is_reviewer(request: Request) -> bool:
 _BASE_STYLE = theme.THEME_CSS
 
 
+_NAV_LINKS = [("/", "Home"), ("/faq", "FAQ"), ("/terms", "Terms"), ("/privacy", "Privacy")]
+
+
+def _site_header(active: str = "/") -> str:
+    """The one nav shared by every marketing/content page (home, faq, terms,
+    privacy). Deliberately not used on the status/review/report pages --
+    those are mid-task screens (watching a scan run, resolving a finding),
+    where a full nav bar is a distraction from the one thing that page is
+    for, not a usability win. Their existing simple "brand mark links home"
+    header stays as-is on purpose.
+    """
+    def _link(href: str, label: str) -> str:
+        cls = ' class="active"' if href == active else ""
+        return f'<a href="{href}"{cls}>{label}</a>'
+
+    links = "".join(_link(href, label) for href, label in _NAV_LINKS)
+    return f"""<header class="site-header"><div class="site-header-inner">
+  <a class="brand" href="/"><span class="dot-b"></span>MAD Platform</a>
+  <nav class="site-nav">{links}<a class="cta" href="/#scan">Scan a site</a></nav>
+</div></header>"""
+
+
+def _site_footer() -> str:
+    links = "".join(f'<a href="{href}">{label}</a>' for href, label in _NAV_LINKS)
+    return f"""<footer class="site-footer"><div class="site-footer-inner">
+  <span>MAD Platform &middot; built during Google's All Things Agentic Hackathon, now free to use</span>
+  <nav>{links}</nav>
+</div></footer>"""
+
+
 def _render_form(error: str | None = None) -> str:
     code_field = (
         '<label class="f-label" for="code">Access code</label>'
@@ -106,17 +136,29 @@ def _render_form(error: str | None = None) -> str:
 <style>{_BASE_STYLE}</style>
 </head>
 <body>
-<div class="page">
-  <div class="brand"><span class="dot-b"></span>MAD Platform</div>
-  <h1>Free accessibility scans for small business websites</h1>
-  <div class="tagline" style="max-width:62ch">
-    Every year, over 5,000 digital accessibility lawsuits get filed in the US, and ten demand
-    letters go out for every one that reaches court. Most small business owners have no
-    practical way to know they're exposed until a letter shows up. This checks for you, for free,
-    verifies what it finds before showing it to you, and gives you a real, actionable fix for
-    each issue, not just a list of problems.
+{_site_header("/")}
+<div class="hero-band">
+  <div class="hero-inner">
+    <span class="hero-eyebrow"><span class="dot-b"></span>Free &middot; self-serve &middot; no account needed</span>
+    <h1>Find out if your site is exposed, before a lawyer does.</h1>
+    <p class="hero-lede">"That's not a statistic, it's most of the internet simply not working."
+    96% of the web's most visited sites fail basic accessibility tests. This scans yours, verifies
+    what it finds, and hands you a real fix, not just a list of problems.</p>
+    <div class="stat-row">
+      <div class="stat"><b>5,000+</b><span>accessibility lawsuits filed in the US every year</span></div>
+      <div class="stat"><b>10&times;</b><span>more demand letters go out for every one that reaches court</span></div>
+      <div class="stat"><b>$0</b><span>cost to check, for as long as this stays free to run</span></div>
+    </div>
   </div>
-  <div class="card">
+</div>
+<div class="page">
+  <div class="how-row">
+    <div class="how-card"><div class="step-n">01</div><h3>Scan</h3><p>Paste your URL. It reads your site the way a real visitor would, then checks the pages that matter most.</p></div>
+    <div class="how-card"><div class="step-n">02</div><h3>Verify</h3><p>Every flag gets independently double-checked before it's shown to you, so you're not chasing false alarms.</p></div>
+    <div class="how-card"><div class="step-n">03</div><h3>Fix</h3><p>Confirmed issues come with a concrete fix and a downloadable, tracker-ready list, not just a score.</p></div>
+  </div>
+  <div class="card" id="scan" style="margin-top:36px">
+    <h2>Scan your site</h2>
     <form action="/scan" method="post">
       <label class="f-label" for="url">Website URL</label>
       <input id="url" type="url" name="url" placeholder="https://example.com" required autofocus>
@@ -128,11 +170,8 @@ def _render_form(error: str | None = None) -> str:
     </form>
     {error_html}
   </div>
-  <div class="tagline" style="margin-top:28px;font-size:12.5px">
-    Built during Google's All Things Agentic Hackathon, now free for anyone to use.
-    Not legal advice, see the <a href="/terms">terms</a> and <a href="/faq">FAQ</a>.
-  </div>
 </div>
+{_site_footer()}
 </body>
 </html>
 """
@@ -356,7 +395,7 @@ async def _run_and_store(job_id: str, url: str) -> None:
     )
 
 
-def _static_page(title: str, body_html: str) -> str:
+def _static_page(title: str, body_html: str, active: str = "") -> str:
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -367,11 +406,12 @@ def _static_page(title: str, body_html: str) -> str:
 <style>{_BASE_STYLE}</style>
 </head>
 <body>
-<div class="page">
-  <div class="brand"><a href="/" style="color:inherit;text-decoration:none"><span class="dot-b"></span>MAD Platform</a></div>
+{_site_header(active)}
+<div class="page with-site-header">
   <h1>{title}</h1>
   <div class="card" style="line-height:1.6">{body_html}</div>
 </div>
+{_site_footer()}
 </body>
 </html>"""
 
@@ -411,6 +451,7 @@ async def terms_page() -> str:
         <p><strong>Changes.</strong> These terms may be updated as the tool evolves. Continued
         use after a change means you accept the updated terms.</p>
         """,
+        active="/terms",
     )
 
 
@@ -442,6 +483,7 @@ async def privacy_page() -> str:
         use as a public testimonial" may be shared publicly; anything not marked that way
         stays private.</p>
         """,
+        active="/privacy",
     )
 
 
@@ -476,6 +518,7 @@ async def faq_page() -> str:
         what's wrong technically; it can't tell you what your specific legal exposure is.
         Talk to a qualified accessibility or ADA attorney for that.</p>
         """,
+        active="/faq",
     )
 
 
