@@ -154,39 +154,40 @@ def _render_form(error: str | None = None) -> str:
   </div>
 
   <div class="scan-section" id="scan">
-    <form class="scan-bar glass-sheen" action="/scan" method="post" aria-label="Scan your website for accessibility issues">
-      <label class="sr-only" for="url">Website URL</label>
-      <input id="url" class="scan-bar-url" type="url" name="url" placeholder="Enter your website URL" required autofocus>
-      <div class="scan-bar-email-wrap">
+    <form class="scan-form glass-sheen" action="/scan" method="post" aria-label="Scan your website for accessibility issues">
+      <div class="scan-field">
+        <label class="sr-only" for="url">Website URL</label>
+        <input id="url" type="url" name="url" placeholder="Enter your website URL" required autofocus>
+      </div>
+      <div class="scan-field">
         <label class="sr-only" for="email">Your email</label>
-        <input id="email" class="scan-bar-email" type="email" name="email" placeholder="Your email" required autocomplete="email" aria-describedby="email-tip">
+        <input id="email" type="email" name="email" placeholder="Your email" required autocomplete="email" aria-describedby="email-tip">
         <span class="info-tip" tabindex="0">
           <span class="tip-icon" aria-hidden="true">?</span>
           <span class="tip-text" id="email-tip" role="tooltip">We'll send your full report here, and use it to keep this free tool honest about whether it's actually helping. Never shared, never sold.</span>
         </span>
       </div>
       {code_field}
-      <button type="submit" class="scan-bar-btn">Scan my site &rarr;</button>
+      <button type="submit" class="scan-submit">Scan my site &rarr;</button>
     </form>
     {error_html}
     <div class="mad-lockup centered">
-      <span class="hl">M</span>ulti-<span class="hl">A</span>gent <span class="hl">D</span>efense <span class="hl">Platform</span>
+      <span class="lockup-line"><span class="hl">M</span>ulti-<span class="hl">A</span>gent <span class="hl">D</span>efense <span class="hl">Platform</span></span>
       <span class="sub">for digital accessibility compliance</span>
     </div>
   </div>
 </section>
 
-<section class="view section alt">
+<section class="view section">
   <div class="section-head">
     <h2>How it works</h2>
     <p>Two steps, no account, no setup.</p>
   </div>
   <div class="how-visual">
     <div class="how-step">
-      <div class="shot-frame glass-sheen"><span class="step-badge">1</span><img src="/static/how-step1.png" alt="The scan bar: enter your website URL and email"></div>
+      <div class="shot-frame glass-sheen"><span class="step-badge">1</span><img src="/static/how-step1.png" alt="The scan form: enter your website URL and email"></div>
       <h3>Enter your site</h3>
     </div>
-    <div class="how-arrow">&rarr;</div>
     <div class="how-step">
       <div class="shot-frame glass-sheen"><span class="step-badge">2</span><img src="/static/hero-dashboard.png" alt="A completed scan report: site score, severity breakdown, and a chart of issues by WCAG principle"></div>
       <h3>See your report</h3>
@@ -218,7 +219,7 @@ def _render_form(error: str | None = None) -> str:
         <div class="bar-col"><span class="bar-val" data-val="2452">2,452</span><div class="bar" data-h="78" style="height:78px;background:var(--border-strong)"></div><span class="bar-lbl">2024</span></div>
         <div class="bar-col"><span class="bar-val" data-val="3117">3,117</span><div class="bar" data-h="100" style="height:100px;background:var(--brand)"></div><span class="bar-lbl">2025</span></div>
       </div>
-      <p class="pie-caption">Website-specific accessibility lawsuits grew 27% in one year</p>
+      <p class="pie-caption">Federal lawsuits over website accessibility grew 27% in one year. Including state courts, nearly 5,000 were filed in 2025 alone.</p>
     </div>
     <div class="stat-panel">
       <div class="bignum-figure">
@@ -226,7 +227,7 @@ def _render_form(error: str | None = None) -> str:
         <div class="vs">vs</div>
         <div class="bn good"><b>$0</b><span>your cost to scan</span></div>
       </div>
-      <p class="pie-caption">3,117 federal lawsuits over website accessibility were filed in 2025 alone</p>
+      <p class="pie-caption">Small businesses typically settle for $5,000&ndash;$15,000; larger companies pay $30,000&ndash;$85,000</p>
     </div>
   </div>
   <p class="stats-quote">"96% of the web's most visited sites fail basic accessibility tests. That's not a statistic, it's most of the internet simply not working for people with disabilities."</p>
@@ -241,9 +242,15 @@ def _render_form(error: str | None = None) -> str:
 
   function ease(t) {{ return 1 - Math.pow(1 - t, 3); }}
 
-  function animateNumber(el, target, duration, fmt) {{
+  // runToken invalidates in-flight rAF loops from a previous run -- without
+  // it, scrolling away and back quickly (before an earlier animation
+  // finished) would leave two loops racing to write the same elements.
+  var runToken = 0;
+
+  function animateNumber(el, target, duration, fmt, token) {{
     var start = performance.now();
     function frame(now) {{
+      if (token !== runToken) return;
       var p = Math.min(1, (now - start) / duration);
       var val = Math.round(ease(p) * target);
       el.textContent = fmt ? fmt(val) : val.toLocaleString();
@@ -252,14 +259,16 @@ def _render_form(error: str | None = None) -> str:
     requestAnimationFrame(frame);
   }}
 
-  function animateDonut() {{
+  function animateDonut(token) {{
     var arc = grid.querySelector('.pie-arc'), pct = grid.querySelector('.pie-pct');
     if (!arc || !pct) return;
     var target = parseFloat(arc.dataset.target), circ = parseFloat(arc.dataset.circumference);
     var targetPct = parseInt(pct.dataset.target, 10);
     arc.setAttribute('stroke-dasharray', '0 ' + circ);
+    pct.textContent = '0%';
     var start = performance.now(), duration = 1400;
     function frame(now) {{
+      if (token !== runToken) return;
       var p = Math.min(1, (now - start) / duration), e = ease(p);
       arc.setAttribute('stroke-dasharray', (e * target).toFixed(2) + ' ' + circ);
       pct.textContent = Math.round(e * targetPct) + '%';
@@ -268,12 +277,13 @@ def _render_form(error: str | None = None) -> str:
     requestAnimationFrame(frame);
   }}
 
-  function animateBars() {{
+  function animateBars(token) {{
     grid.querySelectorAll('.bar[data-h]').forEach(function(bar) {{
       var targetH = parseFloat(bar.dataset.h);
       bar.style.height = '0px';
       var start = performance.now(), duration = 1100;
       function frame(now) {{
+        if (token !== runToken) return;
         var p = Math.min(1, (now - start) / duration);
         bar.style.height = (ease(p) * targetH).toFixed(1) + 'px';
         if (p < 1) requestAnimationFrame(frame);
@@ -281,23 +291,26 @@ def _render_form(error: str | None = None) -> str:
       requestAnimationFrame(frame);
     }});
     grid.querySelectorAll('.bar-val[data-val]').forEach(function(v) {{
-      animateNumber(v, parseInt(v.dataset.val, 10), 1100);
+      animateNumber(v, parseInt(v.dataset.val, 10), 1100, null, token);
     }});
   }}
 
-  function animateBignum() {{
+  function animateBignum(token) {{
     grid.querySelectorAll('.bn b[data-val]').forEach(function(b) {{
-      animateNumber(b, parseInt(b.dataset.val, 10), 1300, function(v) {{ return '$' + v.toLocaleString(); }});
+      animateNumber(b, parseInt(b.dataset.val, 10), 1500, function(v) {{ return '$' + v.toLocaleString(); }}, token);
     }});
   }}
 
+  // No unobserve: re-fires every time the section scrolls back into view,
+  // not just once on first load.
   var observer = new IntersectionObserver(function(entries) {{
     entries.forEach(function(entry) {{
       if (entry.isIntersecting) {{
-        animateDonut();
-        animateBars();
-        animateBignum();
-        observer.unobserve(entry.target);
+        runToken++;
+        var token = runToken;
+        animateDonut(token);
+        animateBars(token);
+        animateBignum(token);
       }}
     }});
   }}, {{threshold: 0.35}});

@@ -95,18 +95,16 @@ a { color: var(--brand-dark); }
 /* One full-viewport "screen" per landing section, so a laptop-height window
    shows exactly one section at a time instead of two-and-a-half at once.
    min-height (not height) so a section with more content than fits one
-   screen still grows rather than clipping. Snap is proximity, not
-   mandatory, and off entirely under reduced-motion -- it should nudge
-   scrolling into place, never fight or disorient it. */
+   screen still grows rather than clipping.
+
+   Deliberately no scroll-snap: it was here in an earlier pass ("proximity,
+   not mandatory, so it nudges rather than fights scrolling"), but in
+   practice proximity snapping kept pulling the last section back up over
+   the footer right after it, making the footer unreachable -- a real
+   usability regression, not a subtle one. min-height alone already gets
+   the one-section-per-screen result; the snap was a flourish on top that
+   cost more than it added. */
 .view { min-height: calc(100vh - 65px); display: flex; flex-direction: column; justify-content: center; }
-@media (prefers-reduced-motion: no-preference) {
-  /* scroll-padding-top keeps a snapped section's top edge clear of the
-     sticky header instead of sliding underneath it -- the header is ~65px
-     on one line, ~95px when the nav wraps to two on a narrow phone; 100px
-     covers both with a little room rather than clipping content again. */
-  html { scroll-snap-type: y proximity; scroll-padding-top: 100px; }
-  .view { scroll-snap-align: start; }
-}
 
 .page { max-width: 640px; margin: 0 auto; padding: 60px 24px; }
 .page.with-site-header { padding-top: 44px; }
@@ -159,46 +157,37 @@ h2 { font-family: "Newsreader", Georgia, serif; font-weight: 600; font-size: 21p
 .hero-title-mark { font-weight: 800; color: var(--brand-dark); }
 .hero-tagline { font-family: "Newsreader", Georgia, serif; font-weight: 500; font-size: 20px; color: var(--ink-soft); margin: 0; }
 
-.scan-section { max-width: 640px; margin: 0 auto; padding: 0 24px 8px; }
-.scan-bar {
-  display: flex; align-items: stretch; gap: 4px;
-  background: var(--glass-strong); border: 1px solid var(--glass-border); border-radius: 999px;
-  padding: 6px 6px 6px 26px; box-shadow: var(--glass-shadow);
+.scan-section { max-width: 460px; margin: 0 auto; padding: 0 24px 8px; }
+.scan-form {
+  display: flex; flex-direction: column; gap: 12px;
+  background: var(--glass-strong); border: 1px solid var(--glass-border); border-radius: 20px;
+  padding: 22px; box-shadow: var(--glass-shadow);
   backdrop-filter: blur(28px) saturate(160%); -webkit-backdrop-filter: blur(28px) saturate(160%);
 }
-.scan-bar input {
-  border: none; background: transparent; padding: 12px 4px; font-size: 15.5px; font-family: inherit;
-  color: var(--ink); outline: none; margin: 0; border-radius: 0; width: auto;
+.scan-field { position: relative; }
+/* Compound selector (class + element + attribute) so this reliably beats
+   the older global input[type=url] rule later in this file regardless of
+   source order -- that equal-specificity, later-wins conflict is exactly
+   why the URL field used to have a visible box and the email field next
+   to it didn't (email isn't type=url, so it never matched that rule). */
+.scan-field input[type=url], .scan-field input[type=email] {
+  display: block; width: 100%; box-sizing: border-box; margin: 0;
+  border: 1px solid var(--border-strong); background: var(--surface); color: var(--ink);
+  border-radius: 12px; padding: 13px 16px; font-size: 15.5px; font-family: inherit;
 }
-.scan-bar input::placeholder { color: var(--muted); }
-.scan-bar-url { flex: 3 1 200px; min-width: 140px; }
-.scan-bar-email-wrap {
-  display: flex; align-items: center; flex: 1 1 160px; min-width: 150px;
-  border-left: 1px solid var(--glass-border); padding-left: 16px;
-}
-.scan-bar-email { flex: 1 1 auto; min-width: 0; }
-.scan-bar-btn { flex: 0 0 auto; border-radius: 999px !important; padding: 12px 22px !important; white-space: nowrap; }
-@media (max-width: 640px) {
-  .hero-title { font-size: 38px; }
-  .scan-bar { flex-direction: column; align-items: stretch; border-radius: 22px; padding: 16px; gap: 2px; }
-  .scan-bar input { padding: 10px 2px; }
-  /* Stacking .scan-bar into a column flips its main axis to vertical, so
-     the desktop rules' flex-basis values (200px/160px, meant as target
-     *widths*) become target *heights* instead -- the email wrapper was
-     rendering 220px tall because of exactly this. Reset both to natural
-     content-driven sizing now that the row's width-splitting logic no
-     longer applies. */
-  .scan-bar-url, .scan-bar-email-wrap { flex: 0 0 auto; min-width: 0; }
-  .scan-bar-email-wrap { border-left: none; border-top: 1px solid var(--glass-border); padding-left: 2px; padding-top: 12px; margin-top: 6px; }
-  .scan-bar-btn { width: 100%; justify-content: center; margin-top: 10px; }
-}
+.scan-field input::placeholder { color: var(--muted); }
+.scan-field input:focus { outline: none; border-color: var(--brand); box-shadow: 0 0 0 3px var(--brand-tint); }
+.scan-field:has(.info-tip) input[type=email] { padding-right: 44px; }
+.scan-field .info-tip { position: absolute; right: 13px; top: 50%; transform: translateY(-50%); }
+.scan-submit { width: 100%; justify-content: center; border-radius: 12px !important; padding: 13px 18px !important; margin-top: 2px; }
+@media (max-width: 640px) { .hero-title { font-size: 38px; } }
 
 /* tooltip: replaces a permanently-visible sentence of fine print next to
    the email field. Shows on hover AND focus (not hover-only) so it's
    reachable by keyboard, and the input itself carries the same text via
    aria-describedby so a screen reader user gets it without needing to
    trigger the tooltip at all. */
-.info-tip { position: relative; display: inline-flex; flex: 0 0 auto; margin-left: 4px; }
+.info-tip { position: relative; display: inline-flex; margin-left: 4px; }
 .tip-icon {
   width: 20px; height: 20px; border-radius: 50%; flex-shrink: 0;
   background: var(--surface-alt); border: 1px solid var(--border-strong); color: var(--muted);
@@ -206,7 +195,7 @@ h2 { font-family: "Newsreader", Georgia, serif; font-weight: 600; font-size: 21p
   display: flex; align-items: center; justify-content: center; cursor: help;
 }
 .tip-text {
-  position: absolute; bottom: calc(100% + 10px); right: -10px; width: 240px;
+  position: absolute; bottom: calc(100% + 10px); right: -10px; width: 220px;
   background: var(--ink); color: var(--surface); font-size: 12.5px; line-height: 1.5; font-weight: 500;
   padding: 11px 13px; border-radius: 10px; box-shadow: var(--shadow); text-align: left;
   opacity: 0; transform: translateY(4px); pointer-events: none; transition: opacity 0.15s ease, transform 0.15s ease;
@@ -214,17 +203,17 @@ h2 { font-family: "Newsreader", Georgia, serif; font-weight: 600; font-size: 21p
 }
 .info-tip:hover .tip-text, .info-tip:focus-within .tip-text { opacity: 1; transform: translateY(0); }
 
+/* nowrap on the acronym line only -- .sub is a separate block child and
+   gets its wrap behavior restored explicitly, since white-space inherits
+   and would otherwise force the caption line flat too. */
 .mad-lockup.centered { text-align: center; margin: 26px auto 0; }
+.mad-lockup.centered .lockup-line { white-space: nowrap; }
+.mad-lockup .sub { white-space: normal; }
 
 .section { max-width: 980px; margin: 0 auto; padding: 56px 24px; }
-.section-head { text-align: center; margin-bottom: 36px; }
+.section-head { text-align: center; margin-bottom: 56px; }
 .section-head h2 { font-size: 26px; margin-bottom: 8px; }
 .section-head p { color: var(--muted); font-size: 14.5px; margin: 0; }
-.section.alt {
-  background: var(--glass); border-top: 1px solid var(--glass-border); border-bottom: 1px solid var(--glass-border);
-  backdrop-filter: blur(30px) saturate(140%); -webkit-backdrop-filter: blur(30px) saturate(140%);
-}
-.section.alt > .section-head, .section.alt > .how-visual, .section.alt > .stats-grid { max-width: 980px; margin-left: auto; margin-right: auto; }
 
 /* how it works: real screenshots, numbered */
 .how-visual { display: flex; align-items: flex-start; justify-content: center; gap: 56px; flex-wrap: wrap; }
@@ -244,8 +233,6 @@ h2 { font-family: "Newsreader", Georgia, serif; font-weight: 600; font-size: 21p
   z-index: 2;
 }
 .how-step h3 { font-size: 16px; margin: 0; }
-.how-arrow { align-self: center; color: var(--border-strong); font-size: 22px; margin-top: 70px; }
-@media (max-width: 760px) { .how-arrow { display: none; } }
 
 /* why it matters: charts presented as one integrated data strip, not
    three separate dashboard widgets -- a divider between columns instead
