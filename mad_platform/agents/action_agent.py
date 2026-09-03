@@ -27,9 +27,12 @@ from mad_platform.tools.issue_sink import IssueSink
 
 LOW_CONFIDENCE_THRESHOLD = 0.6
 
-_APP_BASE_URL = os.environ.get(
-    "MAD_APP_BASE_URL", "https://scan-onboarding-803013053073.us-central1.run.app"
-)
+_APP_BASE_URL = os.environ["MAD_APP_BASE_URL"]  # no fallback default on purpose, see DECISIONS_LOG.md:
+# the original hackathon build defaulted this to its own Cloud Run URL, which meant a
+# fork that forgot to set it would silently generate report/review links pointing at
+# the wrong (frozen) deployment instead of failing loudly. Fails fast at import time
+# now if unset, rather than embedding a wrong or missing URL into a link a real user
+# might click.
 
 
 def idempotency_key(page_url: str, finding: RankedFinding) -> str:

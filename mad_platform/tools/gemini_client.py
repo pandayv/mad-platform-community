@@ -38,6 +38,32 @@ _client = genai.Client(
 T = TypeVar("T", bound=BaseModel)
 
 
+def client_for_key(api_key: str | None):
+    """Bring-your-own-Gemini-key support (see DECISIONS_LOG.md): when a
+    visitor supplies their own Gemini API key, route that request through
+    the plain Developer API surface instead of this project's own Vertex
+    AI billing, using PRO_MODEL below instead of the free tier's
+    Flash/Flash-lite. Same google-genai SDK either way, just a different
+    auth mode -- this is the one place that distinction lives.
+
+    Returns the shared Vertex-authenticated client when api_key is falsy
+    (the normal, free-tier path unaffected). The caller is responsible for
+    never persisting api_key anywhere (no Firestore, no logs) -- it should
+    live only in memory for the one request that supplied it.
+
+    Not yet wired into analyst.py/editor.py/reporter.py's call sites or
+    the /scan form -- this is the foundation, the per-agent threading is
+    still open, logged for follow-up rather than rushed into the core
+    pipeline right before its first real deployment.
+    """
+    if not api_key:
+        return _client
+    return genai.Client(api_key=api_key, http_options=types.HttpOptions(timeout=_TIMEOUT_MS))
+
+
+PRO_MODEL = "gemini-3.7-pro"  # only reachable via a user-supplied key, see client_for_key() above
+
+
 def _with_retry(call):
     """One retry on a transient failure (including a timeout) -- bounded,
     not a loop, matching the retry pattern already used for page fetches

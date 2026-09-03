@@ -31,7 +31,7 @@ from mad_platform.agents.reporter import compute_score, score_color
 from mad_platform.agents.wcag_auto_heal import resolve_kb_escalation
 from mad_platform.state import firestore_client as fs
 from mad_platform.state import storage_client
-from mad_platform.tools.issue_sink import IssueSink, JiraIssueSink, MockIssueSink
+from mad_platform.tools.issue_sink import CsvIssueSink
 from mad_platform.web import theme
 
 # Not logging.basicConfig(): uvicorn configures its own logging on startup,
@@ -53,14 +53,14 @@ logger = logging.getLogger("mad_platform.web")
 app = FastAPI(title="MAD Platform")
 
 
-def _issue_sink() -> IssueSink:
-    """Real Jira when credentials are configured (Cloud Run deploys them
-    from Secret Manager); MockIssueSink otherwise, so local dev and tests
-    still run without live Jira credentials.
+def _issue_sink() -> CsvIssueSink:
+    """Community fork default: no ticket-tracker credentials needed from
+    anyone. Every scan gets its own CsvIssueSink instance so its rows (and
+    therefore its exported CSV) stay scoped to that one scan -- see
+    _run_and_store, which holds onto this instance to call .export() once
+    the scan finishes.
     """
-    if os.environ.get("JIRA_URL"):
-        return JiraIssueSink()
-    return MockIssueSink()
+    return CsvIssueSink()
 
 # scan-onboarding is deployed with --allow-unauthenticated -- a business
 # owner has to be able to just hit the URL. That means the app itself is
@@ -100,23 +100,37 @@ def _render_form(error: str | None = None) -> str:
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>MAD Platform | Accessibility Scan</title>
+<title>MAD Platform | Free accessibility scans for small business websites</title>
+<meta name="description" content="A free, self-serve tool that scans your website for accessibility issues, verifies what it finds, and gives you real, actionable fixes, not just a report.">
 {theme.FONT_LINK}
 <style>{_BASE_STYLE}</style>
 </head>
 <body>
 <div class="page">
   <div class="brand"><span class="dot-b"></span>MAD Platform</div>
-  <h1>Scan a website for accessibility risk</h1>
-  <div class="tagline">Autonomous WCAG scanning, verified findings, real tickets filed -- not just a report.</div>
+  <h1>Free accessibility scans for small business websites</h1>
+  <div class="tagline" style="max-width:62ch">
+    Every year, over 5,000 digital accessibility lawsuits get filed in the US, and ten demand
+    letters go out for every one that reaches court. Most small business owners have no
+    practical way to know they're exposed until a letter shows up. This checks for you, for free,
+    verifies what it finds before showing it to you, and gives you a real, actionable fix for
+    each issue, not just a list of problems.
+  </div>
   <div class="card">
     <form action="/scan" method="post">
       <label class="f-label" for="url">Website URL</label>
       <input id="url" type="url" name="url" placeholder="https://example.com" required autofocus>
+      <label class="f-label" for="email">Your email</label>
+      <input id="email" type="email" name="email" placeholder="you@example.com" required autocomplete="email">
+      <div class="tagline" style="margin:4px 0 0;font-size:12.5px">We'll send your full report here, and use it to keep this free tool honest about whether it's actually helping. Never shared, never sold, see the <a href="/privacy">privacy policy</a>.</div>
       {code_field}
       <div style="margin-top:14px"><button type="submit">Scan now →</button></div>
     </form>
     {error_html}
+  </div>
+  <div class="tagline" style="margin-top:28px;font-size:12.5px">
+    Built during Google's All Things Agentic Hackathon, now free for anyone to use.
+    Not legal advice, see the <a href="/terms">terms</a> and <a href="/faq">FAQ</a>.
   </div>
 </div>
 </body>
@@ -309,8 +323,9 @@ poll();
 
 
 async def _run_and_store(job_id: str, url: str) -> None:
+    sink = _issue_sink()
     try:
-        result = await run_one_time_scan(url, job_id=job_id, issue_sink=_issue_sink())
+        result = await run_one_time_scan(url, job_id=job_id, issue_sink=sink)
     except Exception:
         logger.exception("Scan failed for job %s (%s)", job_id, url)
         return  # run_one_time_scan already wrote status=failed to Firestore before re-raising
@@ -332,8 +347,33 @@ async def _run_and_store(job_id: str, url: str) -> None:
             "filed_count": len(result.filed) + len(result.already_filed),
             "escalated_count": len(result.escalated),
             "report_uri": result.report_uri,
+            # CSV rows only exist in-memory on this one sink instance during
+            # this one scan -- exported and persisted here (Firestore, not a
+            # new storage_client path) so the download route below can serve
+            # it long after this background task has finished.
+            "csv_export": sink.export(),
         },
     )
+
+
+def _static_page(title: str, body_html: str) -> str:
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{title} | MAD Platform</title>
+{theme.FONT_LINK}
+<style>{_BASE_STYLE}</style>
+</head>
+<body>
+<div class="page">
+  <div class="brand"><a href="/" style="color:inherit;text-decoration:none"><span class="dot-b"></span>MAD Platform</a></div>
+  <h1>{title}</h1>
+  <div class="card" style="line-height:1.6">{body_html}</div>
+</div>
+</body>
+</html>"""
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -341,11 +381,120 @@ async def form_page() -> str:
     return _render_form()
 
 
+@app.get("/terms", response_class=HTMLResponse)
+async def terms_page() -> str:
+    return _static_page(
+        "Terms of Service",
+        """
+        <p><strong>This is not legal advice.</strong> MAD Platform is an automated scanning
+        tool. It looks for patterns that commonly indicate WCAG accessibility issues and
+        estimates their real-world risk, it does not perform a legal review, does not
+        guarantee compliance with any law or standard, and a clean scan is not a guarantee
+        you are free of legal exposure. If accessibility compliance matters to your business
+        in a way that carries real legal or financial risk, talk to a qualified attorney.</p>
+
+        <p><strong>No warranty.</strong> This tool is provided free of charge, as-is, with no
+        warranty of any kind, express or implied, including accuracy, completeness, or
+        fitness for a particular purpose. Automated scans can miss real issues and can flag
+        things that aren't real issues.</p>
+
+        <p><strong>Limitation of liability.</strong> To the fullest extent permitted by law,
+        the operator of this tool is not liable for any damages, direct or indirect, arising
+        from your use of it or reliance on its results, including but not limited to lost
+        business, legal costs, or any lawsuit or claim related to web accessibility.</p>
+
+        <p><strong>Fair use.</strong> This is a free, self-serve, rate-limited tool intended
+        for scanning websites you own or are authorized to scan. Automated abuse, attempts to
+        bypass the rate limits, or use of the scan endpoint for anything other than its
+        intended purpose is not permitted.</p>
+
+        <p><strong>Changes.</strong> These terms may be updated as the tool evolves. Continued
+        use after a change means you accept the updated terms.</p>
+        """,
+    )
+
+
+@app.get("/privacy", response_class=HTMLResponse)
+async def privacy_page() -> str:
+    return _static_page(
+        "Privacy Policy",
+        """
+        <p><strong>What we collect:</strong> the website URL you submit, the email address you
+        provide, the scan results (findings, severity, suggested fixes), and, if you choose to
+        leave one, your feedback on whether the report was helpful.</p>
+
+        <p><strong>Why we collect it:</strong> the email is how your report is delivered and
+        how the per-scan review link is scoped to you specifically, and it's also the only way
+        we have of finding out whether this free tool is actually helping real businesses.
+        The IP address of each request is used briefly for rate limiting (to keep this free
+        tool usable for everyone), not stored long-term or linked to your identity beyond
+        that.</p>
+
+        <p><strong>Where it lives:</strong> on Google Cloud infrastructure (Firestore and
+        Cloud Storage), in a project separate from any other project the operator runs.</p>
+
+        <p><strong>What we don't do:</strong> we don't sell your data, and we don't share it
+        with anyone outside of what's needed to run the scan itself (Google Cloud's AI models,
+        used to analyze your site's public-facing pages).</p>
+
+        <p><strong>Your control:</strong> to request deletion of your scan history or email
+        address, contact the operator directly (see the FAQ for how). Feedback marked "okay to
+        use as a public testimonial" may be shared publicly; anything not marked that way
+        stays private.</p>
+        """,
+    )
+
+
+@app.get("/faq", response_class=HTMLResponse)
+async def faq_page() -> str:
+    return _static_page(
+        "Frequently Asked Questions",
+        """
+        <p><strong>What is WCAG?</strong> The Web Content Accessibility Guidelines, the
+        standard most digital accessibility laws and lawsuits point back to. This tool checks
+        your site against it.</p>
+
+        <p><strong>What does this tool actually do?</strong> It scans the pages on your site
+        that carry the most real risk, checks them with both rule-based and AI-assisted
+        review, independently verifies every finding before showing it to you, and gives you a
+        concrete fix for each confirmed issue, plus a downloadable, tracker-importable list.</p>
+
+        <p><strong>What doesn't it do?</strong> It doesn't replace a real accessibility audit
+        or legal review, doesn't check every possible WCAG criterion, and doesn't fix your site
+        for you, it tells you what to fix and how.</p>
+
+        <p><strong>Why is it free? What's the catch?</strong> No catch. It's a self-funded
+        community project. If it's useful to you, there's an optional way to chip in once the
+        donation option is live, but using the scanner itself never requires it.</p>
+
+        <p><strong>Why do you need my email?</strong> To send you the report, to scope your
+        private review link so only you see your own findings, and as a basic safeguard
+        against the free tool being abused. See the <a href="/privacy">privacy policy</a> for
+        the full picture.</p>
+
+        <p><strong>I need real legal help, not just a scan.</strong> This tool can tell you
+        what's wrong technically; it can't tell you what your specific legal exposure is.
+        Talk to a qualified accessibility or ADA attorney for that.</p>
+        """,
+    )
+
+
 @app.post("/scan")
-async def start_scan(url: str = Form(...), code: str = Form("")) -> Response:
+async def start_scan(request: Request, url: str = Form(...), email: str = Form(...), code: str = Form("")) -> Response:
     if _ACCESS_CODE and code != _ACCESS_CODE:
         return HTMLResponse(_render_form(error="Wrong access code."), status_code=403)
-    job_id = fs.create_job(url)
+    email = email.strip()
+    if "@" not in email or "." not in email.split("@")[-1]:
+        return HTMLResponse(_render_form(error="Please enter a valid email address."), status_code=400)
+    # request.client.host is the direct connection IP -- if this ever sits
+    # behind a proxy/load balancer that isn't Cloud Run's own (which already
+    # gives the real client IP here), an X-Forwarded-For read would be
+    # needed instead. Fine as-is for a Cloud Run deployment.
+    client_ip = request.client.host if request.client else "unknown"
+    allowed, reason = fs.check_and_reserve_scan_quota(email, client_ip)
+    if not allowed:
+        return HTMLResponse(_render_form(error=reason), status_code=429)
+    job_id = fs.create_job(url, owner_contact=email)
     asyncio.create_task(_run_and_store(job_id, url))
     return RedirectResponse(f"/status/{job_id}", status_code=303)
 
@@ -390,6 +539,37 @@ async def get_report(job_id: str, download: int = 0) -> Response:
         raise HTTPException(404, "Report not found (job may not be complete yet)")
     headers = {"Content-Disposition": f'attachment; filename="{job_id}.html"'} if download else {}
     return Response(content=content, media_type="text/html", headers=headers)
+
+
+@app.get("/report/{job_id}/tickets.csv")
+async def get_tickets_csv(job_id: str) -> Response:
+    job = fs.get_job(job_id)
+    if job is None or not job.get("summary"):
+        raise HTTPException(404, "Report not found (job may not be complete yet)")
+    csv_text = job["summary"].get("csv_export", "")
+    return Response(
+        content=csv_text,
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="{job_id}-findings.csv"'},
+    )
+
+
+@app.post("/report/{job_id}/feedback")
+async def submit_feedback(
+    job_id: str,
+    rating: int = Form(...),
+    comment: str = Form(""),
+    allow_testimonial: bool = Form(False),
+    contact: str = Form(""),
+) -> JSONResponse:
+    """The immediate "was this helpful" prompt shown on the report page and
+    in the report email -- asking at the moment the report is delivered
+    gets meaningfully better response rates than a delayed follow-up.
+    """
+    if fs.get_job(job_id) is None:
+        raise HTTPException(404, "No such job")
+    fs.save_feedback(job_id, rating=rating, comment=comment, allow_testimonial=allow_testimonial, contact=contact or None)
+    return JSONResponse({"ok": True})
 
 
 @app.get("/api/escalation/{escalation_id}/status")
@@ -622,3 +802,146 @@ async def review_resolve(escalation_id: str, request: Request, disposition: str 
 
     updated = fs.get_escalation(escalation_id)
     return HTMLResponse(_render_review_detail(updated, message=f"Marked {disposition}."))
+
+
+# ---- Per-scan review link: replaces the shared admin queue above for the
+# community fork's "finding" kind escalations. Anyone with this exact
+# job_id + token combination can see and resolve only that one scan's
+# pending items -- no admin code, no visibility into any other scan.
+# kb_version_change and learned_pattern escalations are cross-cutting
+# admin concerns (no owning job), and deliberately stay on the /review
+# path above, never routed through this one. See firestore_client.py's
+# create_escalation()/verify_review_token() docstrings for the reasoning.
+
+
+def _render_scoped_review_list(job_id: str, token: str, pending: list[dict]) -> str:
+    if not pending:
+        items_html = '<div class="tagline" style="margin:0">Nothing pending. Every finding from this scan has been filed or is still being confirmed.</div>'
+    else:
+        rows = "".join(
+            f'<tr><td><span class="badge sev-{html.escape(str(e.get("severity", "medium")).lower())}">Finding</span></td>'
+            f"<td>WCAG {html.escape(str(e.get('wcag_criterion', '?')))} &middot; {html.escape(str(e.get('page_url', '')))}</td>"
+            f'<td class="mono">{e.get("editor_confidence", 0):.2f}</td>'
+            f'<td><a class="btn btn-secondary" href="/review/link/{job_id}/{token}/{html.escape(e["id"])}" style="padding:6px 14px;font-size:12.5px">Review →</a></td></tr>'
+            for e in pending
+        )
+        items_html = (
+            '<table class="q-list"><thead><tr><th>Type</th><th>Detail</th><th>Confidence</th><th></th></tr>'
+            f"</thead><tbody>{rows}</tbody></table>"
+        )
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Your Review Queue | MAD Platform</title>
+{theme.FONT_LINK}
+<style>{_BASE_STYLE}</style>
+</head>
+<body>
+<div class="page wide">
+  <div class="brand"><span class="dot-b"></span>MAD Platform</div>
+  <h1>Your review queue</h1>
+  <div class="tagline">Findings from your scan that need a quick judgment call -- only you can see this.</div>
+  <div class="card">{items_html}</div>
+</div>
+</body>
+</html>"""
+
+
+def _render_scoped_review_detail(job_id: str, token: str, e: dict, message: str | None = None) -> str:
+    eid = e["id"]
+    message_html = f'<div class="success-box">{html.escape(message)}</div>' if message else ""
+    sev = str(e.get("severity", "medium")).lower()
+    body = f"""
+      <div class="field"><b>WCAG {html.escape(str(e.get('wcag_criterion', '')))}</b> <span class="badge sev-{sev}">{html.escape(str(e.get('severity', '')))}</span></div>
+      <div class="field"><b>Page:</b> {html.escape(str(e.get('page_url', '')))}</div>
+      <div class="field"><b>Confidence:</b> <span class="mono">{e.get('editor_confidence', 0):.2f}</span></div>
+      <div class="field"><b>Evidence:</b> {html.escape(str(e.get('editor_rationale', '')))}</div>
+      <div class="field"><b>Suggested fix:</b></div>
+      <div class="fix-cell" style="max-width:none">{html.escape(str(e.get('suggested_fix', '')))}</div>
+    """
+    resolved = e.get("status") == "resolved"
+    if resolved:
+        actions = f'<div class="tagline" style="margin:0">Already resolved: {html.escape(str(e.get("disposition")))}.</div>'
+    else:
+        actions = f"""
+          <form action="/review/link/{job_id}/{token}/{eid}/resolve" method="post" style="display:inline-block;margin-right:10px">
+            <button type="submit" name="disposition" value="confirm">Confirm</button>
+          </form>
+          <form action="/review/link/{job_id}/{token}/{eid}/resolve" method="post" style="display:inline-block">
+            <button type="submit" name="disposition" value="dismiss" class="btn-secondary">Dismiss</button>
+          </form>
+        """
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Your Review Queue | MAD Platform</title>
+{theme.FONT_LINK}
+<style>{_BASE_STYLE}</style>
+</head>
+<body>
+<div class="page">
+  <div class="brand"><a href="/review/link/{job_id}/{token}" style="color:inherit;text-decoration:none"><span class="dot-b"></span>MAD Platform · Your Review Queue</a></div>
+  <h1>Review item</h1>
+  <div class="card">
+    {body}
+    <div style="margin-top:20px">{actions}</div>
+  </div>
+  {message_html}
+</div>
+</body>
+</html>"""
+
+
+def _scoped_escalation_or_404(job_id: str, token: str, escalation_id: str) -> dict:
+    if not fs.verify_review_token(job_id, token):
+        # Same 404 whether the job doesn't exist or the token's wrong --
+        # a wrong-token guess should look identical to a nonexistent job,
+        # not confirm the job is real.
+        raise HTTPException(404, "Not found")
+    escalation = fs.get_escalation(escalation_id)
+    if escalation is None or escalation.get("job_id") != job_id:
+        raise HTTPException(404, "Not found")
+    return escalation
+
+
+@app.get("/review/link/{job_id}/{token}", response_class=HTMLResponse)
+async def scoped_review_list(job_id: str, token: str) -> Response:
+    if not fs.verify_review_token(job_id, token):
+        raise HTTPException(404, "Not found")
+    pending = [e for e in fs.list_escalations_for_job(job_id) if e.get("status") == "pending"]
+    return HTMLResponse(_render_scoped_review_list(job_id, token, pending))
+
+
+@app.get("/review/link/{job_id}/{token}/{escalation_id}", response_class=HTMLResponse)
+async def scoped_review_detail(job_id: str, token: str, escalation_id: str) -> Response:
+    escalation = _scoped_escalation_or_404(job_id, token, escalation_id)
+    return HTMLResponse(_render_scoped_review_detail(job_id, token, escalation))
+
+
+@app.post("/review/link/{job_id}/{token}/{escalation_id}/resolve")
+async def scoped_review_resolve(job_id: str, token: str, escalation_id: str, disposition: str = Form(...)) -> Response:
+    escalation = _scoped_escalation_or_404(job_id, token, escalation_id)
+    if escalation.get("status") == "resolved":
+        return HTMLResponse(_render_scoped_review_detail(job_id, token, escalation, message="Already resolved."))
+
+    # A throwaway sink just for this one resolution -- its row would
+    # otherwise be lost, since the scan's own CsvIssueSink instance is long
+    # gone by the time a reviewer clicks Confirm. If this adds a row
+    # (confirm, not dismiss), append it into the job's already-persisted
+    # CSV export so the download stays complete after the fact.
+    sink = _issue_sink()
+    resolve_finding_escalation(sink, escalation_id, disposition=disposition, reviewer="site-owner")
+    if sink.rows:
+        job = fs.get_job(job_id) or {}
+        summary = dict(job.get("summary") or {})
+        existing_csv = summary.get("csv_export", "")
+        new_row_csv = sink.export().split("\n", 1)[1] if "\n" in sink.export() else ""  # drop the header row
+        summary["csv_export"] = existing_csv.rstrip("\n") + "\n" + new_row_csv if existing_csv else sink.export()
+        fs.save_scan_summary(job_id, summary)
+
+    updated = _scoped_escalation_or_404(job_id, token, escalation_id)
+    return HTMLResponse(_render_scoped_review_detail(job_id, token, updated, message=f"Marked {disposition}."))

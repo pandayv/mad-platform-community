@@ -37,9 +37,7 @@ logger = logging.getLogger("mad_platform.orchestrator")
 
 MAX_ADDITIONAL_PAGES = 2
 
-_APP_BASE_URL = os.environ.get(
-    "MAD_APP_BASE_URL", "https://scan-onboarding-803013053073.us-central1.run.app"
-)
+_APP_BASE_URL = os.environ["MAD_APP_BASE_URL"]  # no fallback default on purpose, see action_agent.py
 
 
 class _PageSelection(BaseModel):
@@ -213,13 +211,15 @@ class ScanResult:
 
 
 async def run_one_time_scan(
-    url: str, job_id: str | None = None, issue_sink: IssueSink | None = None
+    url: str, job_id: str | None = None, issue_sink: IssueSink | None = None, owner_contact: str | None = None
 ) -> ScanResult:
     """The full core, end to end: site -> findings -> recommendations ->
     report -> escalation. Pass an existing job_id to resume it -- pages
     already fully verified are skipped, everything else is (re)run from
     its crawl. issue_sink defaults to a mock ticket sink so this runs
-    without real ticketing credentials configured.
+    without real ticketing credentials configured. owner_contact is the
+    submitter's email (required by the community fork's /scan route) --
+    only used on a fresh job; a resumed job already has its own.
     """
     issue_sink = issue_sink or MockIssueSink()
     existing_job = fs.get_job(job_id) if job_id else None
@@ -234,7 +234,7 @@ async def run_one_time_scan(
             pages = list(existing_job["pages"].keys())
         else:
             if job_id is None:
-                job_id = fs.create_job(url)
+                job_id = fs.create_job(url, owner_contact=owner_contact)
             logger.info("[%s] Phase: crawling_entry_page", job_id)
             fs.set_job_phase(job_id, "crawling_entry_page")
             entry_snapshot = await fetch_page(url)
@@ -311,6 +311,15 @@ async def run_one_time_scan(
                 f"Report: {_APP_BASE_URL}/report/{job_id}",
             ],
         )
+
+        job_record = fs.get_job(job_id) or {}
+        recipient = job_record.get("owner_contact")
+        if recipient:
+            review_lines = [
+                f"WCAG {ranked[index].wcag_criterion} on {ranked[index].page_url}"
+                for index, _finding, _escalation_id in filing["escalated"]
+            ]
+            notify.send_report_email(recipient, url, report, review_lines=review_lines)
     except Exception as exc:  # noqa: BLE001
         if job_id is not None:  # only unset if fs.create_job itself is what failed
             fs.fail_job(job_id, str(exc))
