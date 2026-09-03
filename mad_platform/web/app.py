@@ -23,6 +23,7 @@ import os
 
 from fastapi import FastAPI, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
+from fastapi.staticfiles import StaticFiles
 
 from mad_platform.agents.action_agent import resolve_escalation as resolve_finding_escalation
 from mad_platform.agents.orchestrator import run_one_time_scan
@@ -51,6 +52,7 @@ _mad_logger.propagate = False
 logger = logging.getLogger("mad_platform.web")
 
 app = FastAPI(title="MAD Platform")
+app.mount("/static", StaticFiles(directory=os.path.join(os.path.dirname(__file__), "static")), name="static")
 
 
 def _issue_sink() -> CsvIssueSink:
@@ -138,16 +140,22 @@ def _render_form(error: str | None = None) -> str:
 <body>
 {_site_header("/")}
 <div class="hero-band">
-  <div class="hero-inner">
-    <span class="hero-eyebrow"><span class="dot-b"></span>Free &middot; self-serve &middot; no account needed</span>
-    <h1>Find out if your site is exposed, before a lawyer does.</h1>
-    <p class="hero-lede">"That's not a statistic, it's most of the internet simply not working."
-    96% of the web's most visited sites fail basic accessibility tests. This scans yours, verifies
-    what it finds, and hands you a real fix, not just a list of problems.</p>
-    <div class="stat-row">
-      <div class="stat"><b>5,000+</b><span>accessibility lawsuits filed in the US every year</span></div>
-      <div class="stat"><b>10&times;</b><span>more demand letters go out for every one that reaches court</span></div>
-      <div class="stat"><b>$0</b><span>cost to check, for as long as this stays free to run</span></div>
+  <div class="hero-inner hero-split">
+    <div class="hero-copy">
+      <span class="hero-eyebrow"><span class="dot-b"></span>Community Edition &middot; free &middot; no account needed</span>
+      <h1>Know what's exposed, before a demand letter tells you.</h1>
+      <div class="hero-mad"><b>MAD</b> stands for Multi-Agent Defense, built to catch what a lawsuit would catch, first.</div>
+      <p class="hero-lede">"That's not a statistic, it's most of the internet simply not working."
+      96% of the web's most visited sites fail basic accessibility tests. This scans yours, verifies
+      what it finds, and hands you a real fix, not just a list of problems.</p>
+      <div class="stat-row">
+        <div class="stat"><b>5,000+</b><span>accessibility lawsuits filed in the US every year</span></div>
+        <div class="stat"><b>10&times;</b><span>more demand letters go out for every one that reaches court</span></div>
+        <div class="stat"><b>$0</b><span>cost to check, for as long as this stays free to run</span></div>
+      </div>
+    </div>
+    <div class="hero-shot">
+      <img src="/static/hero-dashboard.png" alt="A completed MAD Platform scan report: a site accessibility score, a severity breakdown of findings, and a chart of issues by WCAG principle">
     </div>
   </div>
 </div>
@@ -166,7 +174,7 @@ def _render_form(error: str | None = None) -> str:
       <input id="email" type="email" name="email" placeholder="you@example.com" required autocomplete="email">
       <div class="tagline" style="margin:4px 0 0;font-size:12.5px">We'll send your full report here, and use it to keep this free tool honest about whether it's actually helping. Never shared, never sold, see the <a href="/privacy">privacy policy</a>.</div>
       {code_field}
-      <div style="margin-top:14px"><button type="submit">Scan now →</button></div>
+      <div style="margin-top:14px"><button type="submit">Scan my site, free →</button></div>
     </form>
     {error_html}
   </div>
@@ -319,7 +327,7 @@ function renderCompleted(data) {
   const counts = s.severity_counts;
   const pCounts = s.principle_counts || {};
   document.getElementById("content").innerHTML = `
-    <div class="meta-line">${s.total_findings} confirmed finding(s) &middot; ${s.filed_count} ticket(s) filed &middot; ${s.escalated_count} awaiting SME review</div>
+    <div class="meta-line">${s.total_findings} confirmed finding(s) &middot; ${s.filed_count} ticket(s) filed &middot; ${s.escalated_count} awaiting your review</div>
     <div class="dash-row">
       <div class="dash-card"><div class="dc-title">Site score</div>
         <div class="dash-score">
@@ -426,30 +434,47 @@ async def terms_page() -> str:
     return _static_page(
         "Terms of Service",
         """
-        <p><strong>This is not legal advice.</strong> MAD Platform is an automated scanning
-        tool. It looks for patterns that commonly indicate WCAG accessibility issues and
-        estimates their real-world risk, it does not perform a legal review, does not
-        guarantee compliance with any law or standard, and a clean scan is not a guarantee
-        you are free of legal exposure. If accessibility compliance matters to your business
-        in a way that carries real legal or financial risk, talk to a qualified attorney.</p>
+        <div class="trust-section-label">Read these three first</div>
+        <ol class="trust-list">
+          <li><h3>This is not legal advice</h3>
+            <p>MAD Platform is an automated scanning tool. It looks for patterns that commonly
+            indicate WCAG accessibility issues and estimates their real-world risk, it does not
+            perform a legal review, does not guarantee compliance with any law or standard, and
+            a clean scan is not a guarantee you are free of legal exposure. If accessibility
+            compliance matters to your business in a way that carries real legal or financial
+            risk, talk to a qualified attorney.</p></li>
 
-        <p><strong>No warranty.</strong> This tool is provided free of charge, as-is, with no
-        warranty of any kind, express or implied, including accuracy, completeness, or
-        fitness for a particular purpose. Automated scans can miss real issues and can flag
-        things that aren't real issues.</p>
+          <li><h3>Who operates this</h3>
+            <p>An independent, open-source project, not a registered company. There's no
+            corporate entity standing behind these terms, only the person running it and the
+            public code doing the work: <a href="https://github.com/pandayv/mad-platform-community" target="_blank" rel="noopener">github.com/pandayv/mad-platform-community</a>.
+            That's also where to raise an issue or a question about how this operates.</p></li>
 
-        <p><strong>Limitation of liability.</strong> To the fullest extent permitted by law,
-        the operator of this tool is not liable for any damages, direct or indirect, arising
-        from your use of it or reliance on its results, including but not limited to lost
-        business, legal costs, or any lawsuit or claim related to web accessibility.</p>
+          <li><h3>Limitation of liability</h3>
+            <p>To the fullest extent permitted by law, the operator of this tool is not liable
+            for any damages, direct or indirect, arising from your use of it or reliance on its
+            results, including but not limited to lost business, legal costs, or any lawsuit or
+            claim related to web accessibility.</p></li>
+        </ol>
 
-        <p><strong>Fair use.</strong> This is a free, self-serve, rate-limited tool intended
-        for scanning websites you own or are authorized to scan. Automated abuse, attempts to
-        bypass the rate limits, or use of the scan endpoint for anything other than its
-        intended purpose is not permitted.</p>
+        <div class="trust-section-label">The rest, for completeness</div>
+        <ol class="trust-list" style="counter-reset: trust-item 3">
+          <li><h3>No warranty</h3>
+            <p>This tool is provided free of charge, as-is, with no warranty of any kind,
+            express or implied, including accuracy, completeness, or fitness for a particular
+            purpose. Automated scans can miss real issues and can flag things that aren't real
+            issues.</p></li>
 
-        <p><strong>Changes.</strong> These terms may be updated as the tool evolves. Continued
-        use after a change means you accept the updated terms.</p>
+          <li><h3>Fair use</h3>
+            <p>This is a free, self-serve, rate-limited tool intended for scanning websites you
+            own or are authorized to scan. Automated abuse, attempts to bypass the rate limits,
+            or use of the scan endpoint for anything other than its intended purpose is not
+            permitted.</p></li>
+
+          <li><h3>Changes</h3>
+            <p>These terms may be updated as the tool evolves. Continued use after a change
+            means you accept the updated terms.</p></li>
+        </ol>
         """,
         active="/terms",
     )
@@ -492,31 +517,49 @@ async def faq_page() -> str:
     return _static_page(
         "Frequently Asked Questions",
         """
-        <p><strong>What is WCAG?</strong> The Web Content Accessibility Guidelines, the
-        standard most digital accessibility laws and lawsuits point back to. This tool checks
-        your site against it.</p>
+        <div class="trust-section-label">Before you trust us with your URL</div>
+        <ol class="trust-list">
+          <li><h3>Is this actually free? What's the catch?</h3>
+            <p>No catch. It's a self-funded community project, not a lead-generation funnel.
+            There's an optional way to chip in once the donation option is live, but the
+            scanner itself never requires it and never will.</p></li>
 
-        <p><strong>What does this tool actually do?</strong> It scans the pages on your site
-        that carry the most real risk, checks them with both rule-based and AI-assisted
-        review, independently verifies every finding before showing it to you, and gives you a
-        concrete fix for each confirmed issue, plus a downloadable, tracker-importable list.</p>
+          <li><h3>Why do you need my email?</h3>
+            <p>Three reasons, no others: to send you the report, to create your private review
+            link so only you (not anyone else who uses this tool) can see your own findings,
+            and as a basic safeguard against the free tool being abused. Full detail in the
+            <a href="/privacy">privacy policy</a>.</p></li>
 
-        <p><strong>What doesn't it do?</strong> It doesn't replace a real accessibility audit
-        or legal review, doesn't check every possible WCAG criterion, and doesn't fix your site
-        for you, it tells you what to fix and how.</p>
+          <li><h3>Who's actually behind this?</h3>
+            <p>A solo, open-source project, not a company. The code that runs this exact site
+            is public: <a href="https://github.com/pandayv/mad-platform-community" target="_blank" rel="noopener">github.com/pandayv/mad-platform-community</a>.
+            You can read exactly what it does with your URL and your email before you ever
+            submit either.</p></li>
+        </ol>
 
-        <p><strong>Why is it free? What's the catch?</strong> No catch. It's a self-funded
-        community project. If it's useful to you, there's an optional way to chip in once the
-        donation option is live, but using the scanner itself never requires it.</p>
+        <div class="trust-section-label">What it does and doesn't do</div>
+        <ol class="trust-list" style="counter-reset: trust-item 3">
+          <li><h3>What is WCAG?</h3>
+            <p>The Web Content Accessibility Guidelines, the standard most digital
+            accessibility laws and lawsuits point back to. This tool checks your site against
+            it.</p></li>
 
-        <p><strong>Why do you need my email?</strong> To send you the report, to scope your
-        private review link so only you see your own findings, and as a basic safeguard
-        against the free tool being abused. See the <a href="/privacy">privacy policy</a> for
-        the full picture.</p>
+          <li><h3>What does this tool actually do?</h3>
+            <p>It scans the pages on your site that carry the most real risk, checks them with
+            both rule-based and AI-assisted review, independently verifies every finding before
+            showing it to you, and gives you a concrete fix for each confirmed issue, plus a
+            downloadable, tracker-importable list.</p></li>
 
-        <p><strong>I need real legal help, not just a scan.</strong> This tool can tell you
-        what's wrong technically; it can't tell you what your specific legal exposure is.
-        Talk to a qualified accessibility or ADA attorney for that.</p>
+          <li><h3>What doesn't it do?</h3>
+            <p>It doesn't replace a real accessibility audit or legal review, doesn't check
+            every possible WCAG criterion, and doesn't fix your site for you, it tells you what
+            to fix and how.</p></li>
+
+          <li><h3>I need real legal help, not just a scan.</h3>
+            <p>This tool can tell you what's wrong technically; it can't tell you what your
+            specific legal exposure is. Talk to a qualified accessibility or ADA attorney for
+            that.</p></li>
+        </ol>
         """,
         active="/faq",
     )
