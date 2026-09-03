@@ -145,7 +145,7 @@ def _render_form(error: str | None = None) -> str:
   <div class="card">
     <div class="scan-card-head">
       <h1>Scan your site</h1>
-      <span class="hero-eyebrow"><span class="dot-b"></span>Community Edition &middot; free &middot; no account needed</span>
+      <span class="hero-eyebrow"><span class="dot-b"></span><span class="hero-eyebrow-text">Community Edition &middot; free &middot; no account needed</span></span>
     </div>
     <form action="/scan" method="post">
       <label class="f-label" for="url">Website URL</label>

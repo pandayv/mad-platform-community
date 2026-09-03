@@ -187,8 +187,9 @@ h2 { font-family: "Newsreader", Georgia, serif; font-weight: 600; font-size: 21p
   display: inline-flex; align-items: center; gap: 7px; font-family: "JetBrains Mono", monospace;
   font-size: 11.5px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--brand-dark);
   background: var(--brand-tint); border: 1px solid var(--brand); border-radius: 999px; padding: 5px 13px 5px 10px;
-  margin-bottom: 18px;
+  margin-bottom: 18px; max-width: 100%;
 }
+.hero-eyebrow-text { min-width: 0; white-space: normal; }
 .hero-inner h1 { font-size: 40px; max-width: 18ch; margin-bottom: 16px; }
 .hero-lede { font-family: "Newsreader", Georgia, serif; font-style: italic; font-size: 19px; line-height: 1.55; color: var(--ink-soft); max-width: 58ch; margin-bottom: 0; }
 .stat-row { display: flex; gap: 28px; flex-wrap: wrap; margin-top: 32px; }
