@@ -21,7 +21,7 @@ from urllib.parse import urljoin, urlparse
 from bs4 import BeautifulSoup
 from pydantic import BaseModel
 
-from mad_platform.agents.action_agent import route_and_file
+from mad_platform.agents.action_agent import LOW_CONFIDENCE_THRESHOLD, route_and_file
 from mad_platform.agents.analyst import RawFinding, analyze_page
 from mad_platform.agents.editor import VerifiedFinding, verify_findings
 from mad_platform.agents.reporter import RankedFinding, draft_report, rank_and_recommend
@@ -159,6 +159,67 @@ async def evaluate_retry_gate(verified: list[VerifiedFinding]) -> _RetryDecision
     return await generate_structured(FLASH, prompt, _RetryDecision)
 
 
+# WCAG 1.2.x findings (video captions, audio transcripts) are a narrow,
+# deliberate exception to trusting Editor's own stated confidence -- not a
+# general escape hatch, and it must not become one. Whether a muted,
+# decorative background video needs captions is a genuine values judgment
+# call, not a verifiable fact the way most of Editor's dismissals are
+# ("this img has role=presentation" is a fact you can check; "does this
+# specific silent video count as informational media" is a real judgment
+# call). In practice, Editor's own stated confidence on this one category
+# doesn't reliably track how gray the call actually is: the same real
+# case (a muted background video on a real site) was dismissed outright
+# twice in a row, even after the general "confirm gray areas at low
+# confidence instead of dismissing" instruction was added to Editor's own
+# prompt -- a prompt-level fix that works for other categories didn't
+# move this one, because the model's own confidence in its reasoning was
+# apparently already high. So this one narrow, high-stakes, and
+# demonstrably-not-prompt-fixable category is forced into human review
+# deterministically, in code, regardless of what Editor decided. This is
+# NOT a statement that Editor can't be trusted to reason -- every other
+# check keeps its full autonomy untouched; this is one specific, justified
+# carve-out, not a pattern to casually extend.
+_ALWAYS_REVIEW_CHECKS = {"video_captions", "ai_media"}
+_ALWAYS_REVIEW_CRITERIA = ("1.2.1", "1.2.2")
+
+
+def _force_media_to_review(
+    raw_findings: list[RawFinding], verified: list[VerifiedFinding]
+) -> list[VerifiedFinding]:
+    """Only touches DISMISSED media findings -- the actual failure mode
+    found tonight (a real finding silently vanishing). A media finding
+    Editor already CONFIRMED, at any confidence, is left completely alone
+    and flows through the exact same path every other check already uses
+    (auto-filed if confident, escalated if low-confidence or critical via
+    the existing general gate) -- that path was never broken, so this
+    override doesn't touch it. Forcing already-correct confirmations
+    through an extra review step too would just be unjustified friction
+    with no failure it's actually fixing.
+    """
+    forced = []
+    for v in verified:
+        raw = raw_findings[v.finding_index]
+        is_media = raw.check in _ALWAYS_REVIEW_CHECKS or v.wcag_criterion.strip().startswith(
+            _ALWAYS_REVIEW_CRITERIA
+        )
+        if is_media and not v.confirmed:
+            forced.append(
+                v.model_copy(
+                    update={
+                        "confirmed": True,
+                        "confidence": min(v.confidence, LOW_CONFIDENCE_THRESHOLD - 0.01),
+                        "rationale": v.rationale
+                        + " [Routed to human review automatically: audio/video accessibility "
+                        "judgment calls always get a human close, regardless of Editor's own "
+                        "confidence.]",
+                    }
+                )
+            )
+        else:
+            forced.append(v)
+    return forced
+
+
 async def _run_analysis_pass(url: str) -> tuple[PageSnapshot, list[RawFinding], list[VerifiedFinding]]:
     snapshot = await fetch_page(url)
     raw_findings = await analyze_page(snapshot)
@@ -177,6 +238,11 @@ async def _process_page(job_id: str, url: str) -> list[VerifiedFinding]:
         fs.checkpoint_page_retry(job_id, url, reason=decision.reasoning)
         snapshot, raw_findings, verified = await _run_analysis_pass(url)  # one more pass, capped -- no loop
         retried = True
+
+    # Applied after the retry gate has already made its call on Editor's
+    # real, unmodified decisions -- this override shouldn't skew that
+    # heuristic, it should only affect what gets persisted and shown.
+    verified = _force_media_to_review(raw_findings, verified)
 
     fs.checkpoint_page_verified(
         job_id,
