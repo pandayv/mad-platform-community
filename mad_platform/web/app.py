@@ -292,6 +292,7 @@ def _render_form(error: str | None = None) -> str:
   </div>
   <p class="compare-footnote"><sup>1</sup> Confirmed: one well-known checker's free tier is explicitly single-page-only. <sup>2</sup> Human review exists, but as a separate consulting-style manual audit, not built into the automated scan. <sup>3</sup> The FTC fined a major overlay-widget vendor $1M in 2025 for overstating what its "auto-fix" can actually do.</p>
   <div class="compare-example">
+    <p class="compare-label">Independent verification, in practice</p>
     <div class="compare-stat">131 of 136</div>
     <p>A well-known free checker recently reported 136 failed accessibility checks on Wikipedia. 131 of them &mdash; 96% of everything it flagged &mdash; came from a single contrast-checking rule. A near-total failure rate on one of the internet's most-viewed, professionally maintained sites isn't a real reflection of the site &mdash; it's a scanner getting the math wrong, at scale, unreviewed. That's exactly what an independent verification pass exists to catch.</p>
   </div>

@@ -395,7 +395,18 @@ h2 { font-family: "Newsreader", Georgia, serif; font-weight: 600; font-size: 21p
 }
 .compare-footnote sup { color: var(--brand-dark); font-weight: 700; }
 
-.compare-example { max-width: 640px; margin: 44px auto 0; text-align: center; }
+/* No border-top here on purpose: the scan beam is position:fixed and
+   sweeps based on viewport height regardless of scroll position, so it
+   passes over every section on the page, not just the hero -- a 1px
+   border under its mix-blend-mode:overlay flares into a bright, glitchy
+   line whenever the beam crosses it (confirmed by hand earlier tonight
+   on a different section, same fix applies here: whitespace alone still
+   reads as separation without giving the beam a hard edge to blow out). */
+.compare-example { max-width: 640px; margin: 44px auto 0; text-align: center; padding-top: 8px; }
+.compare-example .compare-label {
+  font-family: "JetBrains Mono", monospace; font-size: 11px; text-transform: uppercase;
+  letter-spacing: 0.05em; color: var(--muted); margin-bottom: 14px;
+}
 .compare-example .compare-stat {
   font-family: "Newsreader", Georgia, serif; font-weight: 700; font-size: 48px;
   color: var(--crit); line-height: 1; margin-bottom: 14px;
