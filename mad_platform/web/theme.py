@@ -75,6 +75,18 @@ THEME_CSS = """
   }
 }
 * { box-sizing: border-box; }
+/* Defense in depth: this is the third distinct horizontal-overflow bug
+   this session, each from a different root cause (a badge's flex sizing,
+   a bar chart's fixed height, now a comparison table's min-width leaking
+   past its own overflow:auto wrapper for reasons that resisted the
+   obvious fix). Rather than keep chasing each new specific cause
+   one at a time, this is a blanket safety net: nothing on this page is
+   ever supposed to need horizontal page scroll, so don't allow it,
+   regardless of what causes the next one. Intentionally on html, not
+   body -- the specific bug this fixed showed document.documentElement's
+   own scrollWidth/scrollX diverging from body's, so the guard needs to
+   sit at the same level as the part that was actually scrollable. */
+html { overflow-x: hidden; }
 body {
   margin: 0; color: var(--ink); min-height: 100vh;
   background: var(--ambient), var(--bg);
