@@ -347,7 +347,16 @@ h2 { font-family: "Newsreader", Georgia, serif; font-weight: 600; font-size: 21p
    one footnote under the table instead of bloating every cell. Wrapped in
    its own horizontal-scroll container so the table never forces the page
    itself to scroll sideways on a phone. */
-.compare-wrap { overflow-x: auto; margin-bottom: 20px; }
+/* min-width:0 is load-bearing here, not decoration: .compare-wrap is a
+   flex child of .view (flex-direction:column), and flex items default to
+   a content-based automatic minimum width -- overflow-x:auto alone
+   doesn't reliably override that (the spec's "auto-min-size becomes 0"
+   provision needs overflow on both axes to kick in consistently across
+   browsers). Without this, the table's min-width:560px silently forced
+   the whole page 150px wider than the viewport, confirmed live
+   (window.scrollX could reach 151 on a 390px phone) -- the same flex-
+   sizing bug class hit twice already tonight elsewhere on this page. */
+.compare-wrap { overflow-x: auto; min-width: 0; margin-bottom: 20px; }
 .compare-table { width: 100%; min-width: 560px; border-collapse: collapse; }
 .compare-table th, .compare-table td { padding: 14px 16px; border-bottom: 1px solid var(--glass-border); font-size: 14px; line-height: 1.4; vertical-align: middle; }
 .compare-table thead th { font-family: "Newsreader", Georgia, serif; font-weight: 600; font-size: 16px; text-align: center; padding-bottom: 4px; border-bottom: none; }
