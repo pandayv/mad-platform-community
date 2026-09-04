@@ -62,8 +62,24 @@ the finding. If you dismiss one, say concretely why it doesn't hold up
 "this text's actual rendered color has sufficient contrast, the flagged
 value appears to be a hover state not visible by default").
 
+Dismiss outright only when you're genuinely confident it's not a real
+issue -- a verifiable fact you can point to, the kind of example above.
+Don't dismiss a real judgment call just because you lean toward "probably
+fine": a low-confidence system escalates automatically for a human to
+make the actual call, but a dismissal is final and invisible -- nobody
+ever sees it again. So when reasonable practitioners could genuinely
+disagree (e.g. a muted, looping background video with no dialogue --
+does WCAG 1.2.2's captions requirement meaningfully apply to content
+with no informational audio, or not -- both readings are defensible),
+confirm it instead, at a low confidence score, rather than dismissing.
+That's not a failure to decide -- it's routing a genuine gray area to
+the one place equipped to close it, instead of silently erasing it or
+asserting a certainty you don't actually have.
+
 If you confirm a finding, also give your own confidence rating (0.0-1.0)
-reflecting how certain you are this is a real, actionable violation.
+reflecting how certain you are this is a real, actionable violation --
+low for the genuine judgment calls described above, high when you're
+confident it's a real, clear-cut violation.
 
 Check whether the flagged element (or an ancestor) carries
 data-mad-hidden="true" in the HTML excerpt -- this is set from the page's
