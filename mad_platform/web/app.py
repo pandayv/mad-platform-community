@@ -242,6 +242,67 @@ def _render_form(error: str | None = None) -> str:
   <p class="stats-quote">"96% of the web's most visited sites fail basic accessibility tests. That's not a statistic, it's most of the internet simply not working for people with disabilities."</p>
 </section>
 
+<section class="view section">
+  <div class="section-head">
+    <h2>How we compare</h2>
+    <p>What we actually checked, not marketing copy.</p>
+  </div>
+  <div class="compare-wrap">
+    <table class="compare-table">
+      <thead>
+        <tr>
+          <th scope="col"></th>
+          <th scope="col" class="mad-col">MAD Platform</th>
+          <th scope="col">Typical free scanners</th>
+          <th scope="col">Overlay widgets</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <th scope="row">Pages scanned, free</th>
+          <td class="mad-col">Multiple pages, a real crawl</td>
+          <td>Often just one page &mdash; confirmed: one well-known checker's free tier is explicitly single-page-only</td>
+          <td>Doesn't scan your site</td>
+        </tr>
+        <tr>
+          <th scope="row">Independent verification</th>
+          <td class="mad-col">Every finding is re-checked against the actual page before you see it</td>
+          <td>Single automated pass, no second look</td>
+          <td>&mdash;</td>
+        </tr>
+        <tr>
+          <th scope="row">Audio &amp; video captions</th>
+          <td class="mad-col">Checked (WCAG 1.2)</td>
+          <td>Rarely covered &mdash; requires understanding media content, not just page structure</td>
+          <td>&mdash;</td>
+        </tr>
+        <tr>
+          <th scope="row">Genuinely uncertain findings</th>
+          <td class="mad-col">Routed to a real second opinion, not silently dropped or guessed either way</td>
+          <td>Shown with the same confidence as everything else, or missed entirely</td>
+          <td>&mdash;</td>
+        </tr>
+        <tr>
+          <th scope="row">What you actually get</th>
+          <td class="mad-col">A report and real fixes for your own code</td>
+          <td>A report and real fixes for your own code</td>
+          <td>A script that claims to fix your site automatically &mdash; no code changes, and the category the FTC fined a major vendor $1M over in 2025 for overstating what it does</td>
+        </tr>
+        <tr>
+          <th scope="row">Cost</th>
+          <td class="mad-col">Free, always</td>
+          <td>Free with limits, paid for full coverage</td>
+          <td>Paid</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="compare-example">
+    <div class="compare-stat">131 of 136</div>
+    <p>A well-known free checker recently reported 136 failed accessibility checks on Wikipedia. 131 of them &mdash; 96% of everything it flagged &mdash; came from a single contrast-checking rule. A near-total failure rate on one of the internet's most-viewed, professionally maintained sites isn't a real reflection of the site &mdash; it's a scanner getting the math wrong, at scale, unreviewed. That's exactly what an independent verification pass exists to catch.</p>
+  </div>
+</section>
+
 {_site_footer()}
 <script>
 (function() {{

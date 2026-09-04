@@ -341,6 +341,30 @@ h2 { font-family: "Newsreader", Georgia, serif; font-weight: 600; font-size: 21p
   font-style: italic; font-size: 18px; line-height: 1.55; color: var(--ink-soft);
 }
 
+/* how we compare: a real feature table, not marketing bullet points --
+   wrapped in its own horizontal-scroll container so a 4-column table
+   never forces the page itself to scroll sideways on a phone. */
+.compare-wrap { overflow-x: auto; margin-bottom: 40px; }
+.compare-table { width: 100%; min-width: 640px; border-collapse: collapse; }
+.compare-table th, .compare-table td { padding: 14px 18px; text-align: left; border-bottom: 1px solid var(--glass-border); font-size: 14px; line-height: 1.5; vertical-align: top; }
+.compare-table thead th { font-family: "Newsreader", Georgia, serif; font-weight: 600; font-size: 16px; padding-bottom: 16px; }
+.compare-table td:first-child, .compare-table th:first-child {
+  font-family: "JetBrains Mono", monospace; font-size: 11px; text-transform: uppercase;
+  letter-spacing: 0.04em; color: var(--muted); font-weight: 600; white-space: nowrap; padding-right: 24px;
+}
+.compare-table th.mad-col, .compare-table td.mad-col { background: var(--brand-tint); border-radius: 0; }
+.compare-table th.mad-col { color: var(--brand-dark); }
+.compare-table thead th.mad-col { border-radius: 10px 10px 0 0; }
+.compare-table tbody tr:last-child td.mad-col { border-radius: 0 0 10px 10px; }
+.compare-table tbody tr:last-child th, .compare-table tbody tr:last-child td { border-bottom: none; }
+
+.compare-example { max-width: 640px; margin: 44px auto 0; text-align: center; }
+.compare-example .compare-stat {
+  font-family: "Newsreader", Georgia, serif; font-weight: 700; font-size: 48px;
+  color: var(--crit); line-height: 1; margin-bottom: 14px;
+}
+.compare-example p { margin: 0; font-size: 15px; line-height: 1.65; color: var(--ink-soft); }
+
 /* ---- landing hero ---- */
 .hero-band {
   background:
