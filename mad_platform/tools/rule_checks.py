@@ -127,8 +127,19 @@ def check_aria_misuse(soup: BeautifulSoup) -> list[RuleFinding]:
     findings = []
 
     # aria-hidden="true" on a focusable element makes it invisible to
-    # screen readers but still tab-reachable — a well-known trap.
+    # screen readers but still tab-reachable — a well-known trap, but only
+    # while the element is actually rendered. A confirmed real case: a
+    # closed lightbox modal (display:none, aria-hidden, focusable buttons
+    # inside) was flagged as an active keyboard trap even though display:none
+    # already removes it from the tab order on its own -- verified by hand,
+    # tabbing through the live page never reached it. _MARK_HIDDEN_JS
+    # (crawler.py) tags every currently-not-rendered element with
+    # data-mad-hidden="true" before HTML is captured; skip this element and
+    # anything inside a data-mad-hidden ancestor, since the trap this rule
+    # is about doesn't exist while nothing here can currently be focused.
     for el in soup.find_all(attrs={"aria-hidden": "true"}):
+        if _is_effectively_hidden(el):
+            continue
         if el.name in ("a", "button", "input", "select", "textarea") or el.get("tabindex") is not None:
             findings.append(
                 RuleFinding(
@@ -277,6 +288,18 @@ def check_video_captions(soup: BeautifulSoup) -> list[RuleFinding]:
 
 
 # ---------------------------------------------------------------------------
+
+def _is_effectively_hidden(el: Tag) -> bool:
+    """True if el or any ancestor carries data-mad-hidden="true" (set by
+    crawler.py's _MARK_HIDDEN_JS from real computed style, not guessed here).
+    """
+    node: Tag | None = el
+    while node is not None:
+        if node.get("data-mad-hidden") == "true":
+            return True
+        node = node.parent if isinstance(node.parent, Tag) else None
+    return False
+
 
 def _describe(el: Tag) -> str:
     attrs = "".join(f'[{k}="{v}"]' for k, v in el.attrs.items() if k in ("id", "class", "name", "type"))

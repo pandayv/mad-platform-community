@@ -77,6 +77,11 @@ every flag afterward.
 For each issue, give your best-effort WCAG 2.x success criterion number
 based on your own knowledge.
 
+Any element marked data-mad-hidden="true" (or inside one that is) is not
+currently rendered on the page -- confirmed by real computed style
+(display:none, visibility:hidden, or zero size), not a guess. Don't flag
+issues on hidden content as if it's an active, user-facing problem.
+
 Relevant HTML excerpt:
 {html_excerpt}
 """
@@ -101,6 +106,10 @@ Native <video> tags are handled by a separate, deterministic check elsewhere
 
 Deliberately high recall: flag borderline cases, a human reviewer verifies
 every flag afterward.
+
+Any element marked data-mad-hidden="true" (or inside one that is) is not
+currently rendered on the page -- confirmed by real computed style, not a
+guess. Don't flag hidden video/audio content as an active problem.
 
 Relevant HTML excerpt:
 {html_excerpt}

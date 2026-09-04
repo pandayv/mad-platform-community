@@ -65,6 +65,23 @@ value appears to be a hover state not visible by default").
 If you confirm a finding, also give your own confidence rating (0.0-1.0)
 reflecting how certain you are this is a real, actionable violation.
 
+Check whether the flagged element (or an ancestor) carries
+data-mad-hidden="true" in the HTML excerpt -- this is set from the page's
+real computed style (display:none, visibility:hidden, or zero rendered
+size), not guessed, so it's ground truth, not a hint. A finding about
+something not currently rendered is describing a problem that doesn't
+exist in the page's current state, however plausible it reads from the
+markup alone -- dismiss it, or if the underlying concern would become real
+the moment the element is shown (e.g. an aria-hidden modal whose focus
+management might not update correctly when it opens), say so explicitly
+and confirm at reduced confidence rather than treating it as an active
+violation. This is a real, confirmed failure mode: a closed lightbox
+modal (display:none, aria-hidden="true", focusable buttons inside) was
+previously confirmed at 88/100 as an active keyboard trap, when tabbing
+through the live page never actually reached it -- display:none already
+removes focusable descendants from the tab order on its own, regardless
+of aria-hidden.
+
 For each finding, retrieved WCAG reference candidates are provided below
 it -- these are the CLOSEST semantic matches found, not a guaranteed
 correct answer. Use them to ground your citation when they genuinely fit;

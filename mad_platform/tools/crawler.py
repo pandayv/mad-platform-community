@@ -81,6 +81,29 @@ _STYLE_SNAPSHOT_JS = """
 }
 """
 
+# Marks every currently-not-rendered element with data-mad-hidden="true"
+# directly in the DOM, before HTML is captured -- so it travels with the
+# element into the HTML string every downstream check and Editor read
+# (rule-based, AI-based, or Editor's own verification) already consumes,
+# with no extra plumbing needed. Confirmed by hand against a real false
+# positive: a closed lightbox modal (display:none) was flagged as an
+# active keyboard-trap because nothing told the checks it wasn't actually
+# on screen -- same display:none/visibility:hidden/zero-size test already
+# proven correct in _STYLE_SNAPSHOT_JS above, just applied broadly instead
+# of only to text nodes. Does NOT catch off-screen positioning (e.g.
+# left:-9999px) -- that's a real, separate gap, not addressed here.
+_MARK_HIDDEN_JS = """
+() => {
+  document.querySelectorAll('*').forEach(el => {
+    const style = getComputedStyle(el);
+    const rect = el.getBoundingClientRect();
+    if (style.display === 'none' || style.visibility === 'hidden' || rect.width === 0 || rect.height === 0) {
+      el.setAttribute('data-mad-hidden', 'true');
+    }
+  });
+}
+"""
+
 
 def _assert_safe_target(url: str) -> None:
     from urllib.parse import urlparse
@@ -137,6 +160,7 @@ async def fetch_page(url: str, timeout_ms: int = 15000, retries: int = 2) -> Pag
                     # chatter that may never stop.
                     await page.goto(url, timeout=timeout_ms, wait_until="load")
                     await page.wait_for_timeout(1500)
+                    await page.evaluate(_MARK_HIDDEN_JS)
                     html = await page.content()
                     title = await page.title()
                     screenshot = await page.screenshot(full_page=True)
