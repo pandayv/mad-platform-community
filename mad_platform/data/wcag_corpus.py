@@ -33,6 +33,21 @@ WCAG_CORPUS: list[WCAGCriterion] = [
         "from the accessibility tree entirely.",
     ),
     WCAGCriterion(
+        "1.2.1", "Audio-only and Video-only (Prerecorded)", "A",
+        "For prerecorded audio-only content (e.g. a podcast embed), a text "
+        "transcript is provided. For prerecorded video-only content (no "
+        "soundtrack), either a text alternative or an audio track describing "
+        "the visual content is provided.",
+    ),
+    WCAGCriterion(
+        "1.2.2", "Captions (Prerecorded)", "A",
+        "Captions are provided for all prerecorded audio content in synchronized "
+        "media (video with a soundtrack) -- the primary criterion serving Deaf "
+        "and hard-of-hearing users, distinct from audio description (which "
+        "serves blind users) and not satisfied by unreviewed auto-generated "
+        "captions alone if they're materially inaccurate.",
+    ),
+    WCAGCriterion(
         "1.3.1", "Info and Relationships", "A",
         "Information, structure, and relationships conveyed through presentation "
         "(such as heading hierarchy, list structure, or table headers) can be "

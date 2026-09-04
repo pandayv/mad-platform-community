@@ -242,6 +242,41 @@ def check_contrast(snapshot: PageSnapshot) -> list[RuleFinding]:
 
 
 # ---------------------------------------------------------------------------
+# 7. Video captions
+# ---------------------------------------------------------------------------
+
+def check_video_captions(soup: BeautifulSoup) -> list[RuleFinding]:
+    """Flags <video> elements with no <track kind="captions"|"subtitles"> child.
+
+    Deaf and hard-of-hearing users have had no coverage at all until this
+    check -- everything else here is about text/structure/contrast, nothing
+    touched WCAG 1.2 (Time-based Media). This only covers natively-hosted
+    <video> tags, where caption-track presence is a plain, certain fact in
+    the markup. Embedded players (YouTube, Vimeo) are deliberately NOT
+    handled here -- a cross-origin iframe's actual caption status can't be
+    read from this page's HTML at all, so that's a separate, lower-
+    confidence AI check (ai_checks.py) instead of a false "certain"
+    violation here.
+    """
+    findings = []
+    for video in soup.find_all("video"):
+        tracks = video.find_all("track")
+        has_captions = any(t.get("kind") in ("captions", "subtitles") for t in tracks)
+        if not has_captions:
+            findings.append(
+                RuleFinding(
+                    check="video_captions",
+                    wcag_criterion="1.2.2",
+                    message='<video> has no <track kind="captions"> (or "subtitles") '
+                            "child -- content isn't accessible to Deaf or "
+                            "hard-of-hearing users.",
+                    selector=_describe(video),
+                )
+            )
+    return findings
+
+
+# ---------------------------------------------------------------------------
 
 def _describe(el: Tag) -> str:
     attrs = "".join(f'[{k}="{v}"]' for k, v in el.attrs.items() if k in ("id", "class", "name", "type"))
@@ -258,4 +293,5 @@ def run_all_rule_checks(snapshot: PageSnapshot) -> list[RuleFinding]:
     findings += check_aria_misuse(soup)
     findings += check_tab_order(soup)
     findings += check_contrast(snapshot)
+    findings += check_video_captions(soup)
     return findings

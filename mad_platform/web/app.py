@@ -30,6 +30,7 @@ from mad_platform.agents.orchestrator import run_one_time_scan
 from mad_platform.agents.pattern_miner import resolve_pattern_escalation
 from mad_platform.agents.reporter import compute_score, score_color
 from mad_platform.agents.wcag_auto_heal import resolve_kb_escalation
+from mad_platform.tools.rag import embed_and_store_corpus
 from mad_platform.state import firestore_client as fs
 from mad_platform.state import storage_client
 from mad_platform.tools.issue_sink import CsvIssueSink
@@ -1015,6 +1016,23 @@ def _render_review_detail(e: dict, message: str | None = None) -> str:
 </div>
 </body>
 </html>"""
+
+
+@app.post("/internal/reseed-wcag-corpus")
+async def internal_reseed_wcag_corpus(request: Request) -> Response:
+    """One-off operational trigger, not a public feature: WCAG_CORPUS in
+    wcag_corpus.py just gained two new entries (1.2.1/1.2.2, for the new
+    video-caption checks) and embed_and_store_corpus() has to actually run
+    against Firestore for those to be retrievable -- editing the Python
+    source alone doesn't touch the stored knowledge base. Safe to re-run
+    (overwrites by criterion number, no duplicates), gated behind the same
+    review-code check as the rest of the admin surface. Meant to be removed
+    once it's been run, not left as a standing feature.
+    """
+    if not _is_reviewer(request):
+        return JSONResponse({"error": "unauthorized"}, status_code=403)
+    count = embed_and_store_corpus()
+    return JSONResponse({"seeded": count})
 
 
 @app.get("/review", response_class=HTMLResponse)

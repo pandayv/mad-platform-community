@@ -81,6 +81,31 @@ Relevant HTML excerpt:
 {html_excerpt}
 """
 
+_MEDIA_PROMPT = """You are an accessibility analyst reviewing a webpage's HTML for
+video and audio content that may not be accessible to Deaf and hard-of-hearing
+users (WCAG 1.2.1 Audio-only and Video-only, 1.2.2 Captions).
+
+Look for:
+- Embedded video players -- YouTube, Vimeo, Wistia, or similar iframe embeds
+  (check the src/data-src for those domains, or common embed markup patterns).
+- <audio> elements, and whether there's visible text nearby that reads like a
+  transcript.
+
+You cannot see inside a cross-origin iframe, so you cannot know for certain
+whether an embedded video's captions are actually turned on -- that's a real
+limit, not something to guess past. Set confidence low-to-moderate (e.g.
+0.3-0.5) for embedded-player findings, and say plainly in the description
+that this needs manual verification, not that it's a confirmed violation.
+Native <video> tags are handled by a separate, deterministic check elsewhere
+-- don't duplicate those here.
+
+Deliberately high recall: flag borderline cases, a human reviewer verifies
+every flag afterward.
+
+Relevant HTML excerpt:
+{html_excerpt}
+"""
+
 
 async def run_visual_check(snapshot: PageSnapshot) -> list[AIFinding]:
     prompt = _VISUAL_PROMPT.format(title=snapshot.title)
@@ -95,5 +120,12 @@ async def run_semantic_check(snapshot: PageSnapshot) -> list[AIFinding]:
     # wasteful for a check that only cares about accessible-name content.
     excerpt = snapshot.html[:8000]
     prompt = _SEMANTIC_PROMPT.format(html_excerpt=excerpt)
+    result = await generate_structured(FLASH_LITE, prompt, _AIFindingsResponse)
+    return result.findings
+
+
+async def run_media_check(snapshot: PageSnapshot) -> list[AIFinding]:
+    excerpt = snapshot.html[:8000]
+    prompt = _MEDIA_PROMPT.format(html_excerpt=excerpt)
     result = await generate_structured(FLASH_LITE, prompt, _AIFindingsResponse)
     return result.findings

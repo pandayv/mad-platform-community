@@ -12,7 +12,7 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass
 
-from mad_platform.tools.ai_checks import AIFinding, run_semantic_check, run_visual_check
+from mad_platform.tools.ai_checks import AIFinding, run_media_check, run_semantic_check, run_visual_check
 from mad_platform.tools.crawler import PageSnapshot
 from mad_platform.tools.rule_checks import RuleFinding, run_all_rule_checks
 
@@ -63,15 +63,17 @@ async def analyze_page(snapshot: PageSnapshot) -> list[RawFinding]:
     rule_task = asyncio.to_thread(run_all_rule_checks, snapshot)
     visual_task = run_visual_check(snapshot)
     semantic_task = run_semantic_check(snapshot)
+    media_task = run_media_check(snapshot)
 
-    rule_findings, visual_findings, semantic_findings = await asyncio.gather(
-        rule_task, visual_task, semantic_task
+    rule_findings, visual_findings, semantic_findings, media_findings = await asyncio.gather(
+        rule_task, visual_task, semantic_task, media_task
     )
 
     findings: list[RawFinding] = []
     findings += [_from_rule(f) for f in rule_findings]
     findings += [_from_ai("ai_visual", f) for f in visual_findings]
     findings += [_from_ai("ai_semantic", f) for f in semantic_findings]
+    findings += [_from_ai("ai_media", f) for f in media_findings]
     return findings
 
 
