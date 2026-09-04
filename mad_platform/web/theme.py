@@ -88,6 +88,7 @@ THEME_CSS = """
    sit at the same level as the part that was actually scrollable. */
 html { overflow-x: hidden; }
 body {
+  overflow-x: hidden;
   margin: 0; color: var(--ink); min-height: 100vh;
   background: var(--ambient), var(--bg);
   background-attachment: fixed;
