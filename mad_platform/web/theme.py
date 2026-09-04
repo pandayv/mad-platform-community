@@ -341,22 +341,37 @@ h2 { font-family: "Newsreader", Georgia, serif; font-weight: 600; font-size: 21p
   font-style: italic; font-size: 18px; line-height: 1.55; color: var(--ink-soft);
 }
 
-/* how we compare: a real feature table, not marketing bullet points --
-   wrapped in its own horizontal-scroll container so a 4-column table
-   never forces the page itself to scroll sideways on a phone. */
-.compare-wrap { overflow-x: auto; margin-bottom: 40px; }
-.compare-table { width: 100%; min-width: 640px; border-collapse: collapse; }
-.compare-table th, .compare-table td { padding: 14px 18px; text-align: left; border-bottom: 1px solid var(--glass-border); font-size: 14px; line-height: 1.5; vertical-align: top; }
-.compare-table thead th { font-family: "Newsreader", Georgia, serif; font-weight: 600; font-size: 16px; padding-bottom: 16px; }
+/* how we compare: a real feature table, scannable at a glance -- check/
+   cross marks carry the answer, cell text stays to a word or two, and the
+   handful of facts that actually need a sentence (the citations) live in
+   one footnote under the table instead of bloating every cell. Wrapped in
+   its own horizontal-scroll container so the table never forces the page
+   itself to scroll sideways on a phone. */
+.compare-wrap { overflow-x: auto; margin-bottom: 20px; }
+.compare-table { width: 100%; min-width: 560px; border-collapse: collapse; }
+.compare-table th, .compare-table td { padding: 14px 16px; border-bottom: 1px solid var(--glass-border); font-size: 14px; line-height: 1.4; vertical-align: middle; }
+.compare-table thead th { font-family: "Newsreader", Georgia, serif; font-weight: 600; font-size: 16px; text-align: center; padding-bottom: 4px; border-bottom: none; }
+.compare-table thead .col-sub { display: block; font-family: "JetBrains Mono", monospace; font-weight: 500; font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.03em; color: var(--muted); margin-top: 3px; }
+.compare-table thead tr:last-child th { padding-bottom: 14px; border-bottom: 1px solid var(--glass-border); }
 .compare-table td:first-child, .compare-table th:first-child {
   font-family: "JetBrains Mono", monospace; font-size: 11px; text-transform: uppercase;
-  letter-spacing: 0.04em; color: var(--muted); font-weight: 600; white-space: nowrap; padding-right: 24px;
+  letter-spacing: 0.04em; color: var(--muted); font-weight: 600; text-align: left; white-space: nowrap; padding-right: 20px;
 }
-.compare-table th.mad-col, .compare-table td.mad-col { background: var(--brand-tint); border-radius: 0; }
+.compare-table td:not(:first-child) { text-align: center; }
+.compare-table th.mad-col, .compare-table td.mad-col { background: var(--brand-tint); }
 .compare-table th.mad-col { color: var(--brand-dark); }
-.compare-table thead th.mad-col { border-radius: 10px 10px 0 0; }
+.compare-table thead tr:first-child th.mad-col { border-radius: 10px 10px 0 0; }
 .compare-table tbody tr:last-child td.mad-col { border-radius: 0 0 10px 10px; }
 .compare-table tbody tr:last-child th, .compare-table tbody tr:last-child td { border-bottom: none; }
+.compare-table .mark-yes, .compare-table .mark-no { font-size: 17px; font-weight: 700; }
+.compare-table .mark-yes { color: var(--brand-dark); }
+.compare-table .mark-no { color: var(--muted); }
+.compare-table .mark-partial { font-size: 11.5px; color: var(--muted); }
+.compare-footnote {
+  max-width: 720px; margin: 0 auto 40px; text-align: center;
+  font-size: 12.5px; line-height: 1.6; color: var(--muted);
+}
+.compare-footnote sup { color: var(--brand-dark); font-weight: 700; }
 
 .compare-example { max-width: 640px; margin: 44px auto 0; text-align: center; }
 .compare-example .compare-stat {

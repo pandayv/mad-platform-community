@@ -251,52 +251,46 @@ def _render_form(error: str | None = None) -> str:
     <table class="compare-table">
       <thead>
         <tr>
-          <th scope="col"></th>
+          <th scope="col" rowspan="2"></th>
           <th scope="col" class="mad-col">MAD Platform</th>
-          <th scope="col">Typical free scanners</th>
-          <th scope="col">Overlay widgets</th>
+          <th scope="col">Free scanners</th>
+          <th scope="col">Paid audit tools</th>
+        </tr>
+        <tr>
+          <th scope="col" class="mad-col"><span class="col-sub">Free, always</span></th>
+          <th scope="col"><span class="col-sub">Free tier only<sup>1</sup></span></th>
+          <th scope="col"><span class="col-sub">$29&ndash;$249+/mo</span></th>
         </tr>
       </thead>
       <tbody>
         <tr>
-          <th scope="row">Pages scanned, free</th>
-          <td class="mad-col">Multiple pages, a real crawl</td>
-          <td>Often just one page &mdash; confirmed: one well-known checker's free tier is explicitly single-page-only</td>
-          <td>Doesn't scan your site</td>
+          <th scope="row">Multi-page scan</th>
+          <td class="mad-col"><span class="mark-yes" aria-hidden="true">&check;</span><span class="sr-only">Yes</span></td>
+          <td><span class="mark-no" aria-hidden="true">&cross;</span><span class="sr-only">No</span></td>
+          <td><span class="mark-yes" aria-hidden="true">&check;</span><span class="sr-only">Yes</span></td>
         </tr>
         <tr>
           <th scope="row">Independent verification</th>
-          <td class="mad-col">Every finding is re-checked against the actual page before you see it</td>
-          <td>Single automated pass, no second look</td>
-          <td>&mdash;</td>
+          <td class="mad-col"><span class="mark-yes" aria-hidden="true">&check;</span><span class="sr-only">Yes, automatic</span></td>
+          <td><span class="mark-no" aria-hidden="true">&cross;</span><span class="sr-only">No</span></td>
+          <td><span class="mark-partial">Add-on only<sup>2</sup></span></td>
         </tr>
         <tr>
-          <th scope="row">Audio &amp; video captions</th>
-          <td class="mad-col">Checked (WCAG 1.2)</td>
-          <td>Rarely covered &mdash; requires understanding media content, not just page structure</td>
-          <td>&mdash;</td>
+          <th scope="row">Audio/video captions</th>
+          <td class="mad-col"><span class="mark-yes" aria-hidden="true">&check;</span><span class="sr-only">Yes</span></td>
+          <td><span class="mark-no" aria-hidden="true">&cross;</span><span class="sr-only">No</span></td>
+          <td><span class="mark-no" aria-hidden="true">&cross;</span><span class="sr-only">Rarely</span></td>
         </tr>
         <tr>
-          <th scope="row">Genuinely uncertain findings</th>
-          <td class="mad-col">Routed to a real second opinion, not silently dropped or guessed either way</td>
-          <td>Shown with the same confidence as everything else, or missed entirely</td>
-          <td>&mdash;</td>
-        </tr>
-        <tr>
-          <th scope="row">What you actually get</th>
-          <td class="mad-col">A report and real fixes for your own code</td>
-          <td>A report and real fixes for your own code</td>
-          <td>A script that claims to fix your site automatically &mdash; no code changes, and the category the FTC fined a major vendor $1M over in 2025 for overstating what it does</td>
-        </tr>
-        <tr>
-          <th scope="row">Cost</th>
-          <td class="mad-col">Free, always</td>
-          <td>Free with limits, paid for full coverage</td>
-          <td>Paid</td>
+          <th scope="row">Fixes your code, not a widget</th>
+          <td class="mad-col"><span class="mark-yes" aria-hidden="true">&check;</span><span class="sr-only">Yes</span></td>
+          <td><span class="mark-yes" aria-hidden="true">&check;</span><span class="sr-only">Yes</span></td>
+          <td><span class="mark-partial">Often upsells a widget<sup>3</sup></span></td>
         </tr>
       </tbody>
     </table>
   </div>
+  <p class="compare-footnote"><sup>1</sup> Confirmed: one well-known checker's free tier is explicitly single-page-only. <sup>2</sup> Human review exists, but as a separate consulting-style manual audit, not built into the automated scan. <sup>3</sup> The FTC fined a major overlay-widget vendor $1M in 2025 for overstating what its "auto-fix" can actually do.</p>
   <div class="compare-example">
     <div class="compare-stat">131 of 136</div>
     <p>A well-known free checker recently reported 136 failed accessibility checks on Wikipedia. 131 of them &mdash; 96% of everything it flagged &mdash; came from a single contrast-checking rule. A near-total failure rate on one of the internet's most-viewed, professionally maintained sites isn't a real reflection of the site &mdash; it's a scanner getting the math wrong, at scale, unreviewed. That's exactly what an independent verification pass exists to catch.</p>
