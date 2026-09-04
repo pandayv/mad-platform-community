@@ -18,6 +18,7 @@ call worth spending that on, unlike the high-volume per-page checks.
 from __future__ import annotations
 
 import html as html_lib
+import math
 import os
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -50,17 +51,35 @@ class RankedFinding:
     risk_rationale: str
 
 
-_SCORE_PENALTY = {"critical": 25, "high": 15, "medium": 8, "low": 3}
+_SCORE_WEIGHT = {"critical": 20.0, "high": 12.0, "medium": 6.0, "low": 2.0}
 
 
 def compute_score(ranked: list[RankedFinding]) -> int:
     """A single 0-100 "site health" number for the UI's headline display --
-    not a WCAG-official metric, just 100 minus a severity-weighted penalty
-    per confirmed finding, clamped at 0. Deterministic Python over the
-    LLM's already-assigned severities, not another judgment call.
+    not a WCAG-official metric, just 100 minus a severity-weighted penalty,
+    clamped to [0, 100]. Deterministic Python over the LLM's already-
+    assigned severities, not another judgment call.
+
+    Penalty scales with the square root of how many findings are in each
+    severity tier, not linearly with the count. The old version (a flat
+    per-finding subtraction) meant 4 critical findings alone -- a real but
+    fixable handful of issues -- zeroed the score outright, and nobody
+    shown a 0 believes it reflects a "fix these and you're in good shape"
+    site. Square-root weighting gives the first finding in a tier close to
+    its full weight but flattens fast after that: 4 criticals cost about
+    2x one critical (sqrt(4) = 2), not 4x. This is what makes "you're at
+    65, fix your 2 critical issues and you're at 90" an honest, calculable
+    claim instead of a number that can only ever read as "broken" or
+    "perfect." A genuinely riddled site (dozens of findings across tiers)
+    still drives the score to 0 -- sqrt keeps growing, just slower.
     """
-    penalty = sum(_SCORE_PENALTY.get(r.severity.lower(), 5) for r in ranked)
-    return max(0, 100 - penalty)
+    counts: dict[str, int] = {}
+    for finding in ranked:
+        sev = finding.severity.lower()
+        counts[sev] = counts.get(sev, 0) + 1
+
+    penalty = sum(_SCORE_WEIGHT.get(sev, 4.0) * math.sqrt(n) for sev, n in counts.items())
+    return max(0, min(100, round(100 - penalty)))
 
 
 def score_color(score: int) -> str:
