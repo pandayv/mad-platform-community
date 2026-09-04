@@ -22,8 +22,6 @@ future work.
 
 from __future__ import annotations
 
-import logging
-
 from pydantic import BaseModel
 
 from mad_platform.agents.analyst import RawFinding
@@ -44,9 +42,6 @@ class VerifiedFinding(BaseModel):
 
 class _VerificationResponse(BaseModel):
     verifications: list[VerifiedFinding]
-
-
-logger = logging.getLogger("mad_platform.editor")
 
 
 _EDITOR_PROMPT = """You are an accessibility Editor. Analyst has flagged the
@@ -142,13 +137,4 @@ async def verify_findings(snapshot: PageSnapshot, findings: list[RawFinding]) ->
     result = await generate_structured(
         FLASH, prompt, _VerificationResponse, image_bytes=snapshot.screenshot_png
     )
-    # TEMPORARY: diagnosing why a real video_captions rule finding on
-    # dbatgeorgetown.com isn't reaching the report -- remove once resolved.
-    for v in result.verifications:
-        src_finding = findings[v.finding_index] if 0 <= v.finding_index < len(findings) else None
-        if src_finding and src_finding.check == "video_captions":
-            logger.info(
-                "video_captions verification: confirmed=%s confidence=%.2f rationale=%r",
-                v.confirmed, v.confidence, v.rationale,
-            )
     return result.verifications
