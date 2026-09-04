@@ -34,7 +34,7 @@ _FEEDBACK = _client.collection("feedback")  # immediate "was this helpful" respo
 
 # Community-fork limits -- adjust here, not scattered through call sites.
 MAX_SCANS_PER_EMAIL_PER_DAY = 3
-MAX_SCANS_PER_IP_PER_DAY = 5
+MAX_SCANS_PER_IP_PER_DAY = 15  # TEMP: raised for benchmark testing, revert to 5 after (see DECISIONS_LOG.md)
 MAX_SCANS_PER_MONTH = 500  # a scan-count proxy for the $ budget, see DECISIONS_LOG.md
 
 # Stages, in order -- used to answer "what's the next incomplete stage".

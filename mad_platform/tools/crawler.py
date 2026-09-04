@@ -126,7 +126,17 @@ async def fetch_page(url: str, timeout_ms: int = 15000, retries: int = 2) -> Pag
                 browser = await p.chromium.launch()
                 try:
                     page = await browser.new_page()
-                    await page.goto(url, timeout=timeout_ms, wait_until="networkidle")
+                    # "networkidle" is a known Playwright pitfall for real-world
+                    # sites: any persistent connection (a chat widget, an
+                    # analytics beacon, a websocket) means the page never goes
+                    # fully idle, so it doesn't "eventually settle" -- it fails
+                    # the same way on every retry. Confirmed live: a real small-
+                    # business site (ladawnsbeauty.com) failed all 3 attempts
+                    # this way. "load" plus a short explicit settle window
+                    # catches JS-rendered content without waiting on background
+                    # chatter that may never stop.
+                    await page.goto(url, timeout=timeout_ms, wait_until="load")
+                    await page.wait_for_timeout(1500)
                     html = await page.content()
                     title = await page.title()
                     screenshot = await page.screenshot(full_page=True)
