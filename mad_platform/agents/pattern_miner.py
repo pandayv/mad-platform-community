@@ -46,8 +46,12 @@ MIN_OCCURRENCES = 3  # fewer than this isn't a pattern, just one editor call
 SAMPLE_SIZE = 6  # rationales shown to Gemini per cluster -- enough to judge consistency, not the whole history
 CONFIDENCE_THRESHOLD = 0.75
 
+# Soft fallback on purpose, unlike orchestrator.py/reporter.py's fail-fast
+# reads of the same variable: this URL only ever reaches a Slack alert
+# (optional, currently unconfigured), never a link a real user depends on,
+# so it isn't worth crashing the whole weekly job over.
 _APP_BASE_URL = os.environ.get(
-    "MAD_APP_BASE_URL", "https://scan-onboarding-803013053073.us-central1.run.app"
+    "MAD_APP_BASE_URL", "https://scan-onboarding-531805458979.us-central1.run.app"
 )
 
 

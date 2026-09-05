@@ -33,10 +33,9 @@ from mad_platform.web import theme
 # The report can be opened outside the app's own origin (downloaded, saved
 # locally, reopened later) so the live-status check below needs an
 # absolute URL, not a relative fetch that only works when served from
-# the app itself.
-_APP_BASE_URL = os.environ.get(
-    "MAD_APP_BASE_URL", "https://scan-onboarding-803013053073.us-central1.run.app"
-)
+# the app itself. No fallback default -- see orchestrator.py's own read
+# of this variable for why a stale hardcoded URL is worse than failing loudly.
+_APP_BASE_URL = os.environ["MAD_APP_BASE_URL"]
 
 
 @dataclass
@@ -208,7 +207,7 @@ def _esc(text: str) -> str:
     return html_lib.escape(str(text))
 
 
-def _status_badge(ticket: str | None, escalation_id: str | None) -> str:
+def _status_badge(ticket: str | None, escalation_id: str | None, review_url: str | None = None) -> str:
     if ticket:
         return f'<span class="badge sev-ok">Filed: {_esc(ticket)}</span>'
     if escalation_id:
@@ -216,14 +215,25 @@ def _status_badge(ticket: str | None, escalation_id: str | None) -> str:
         # the small script at the end of this page checks the live status
         # on load and updates this badge in place, so a report reopened
         # later reflects what actually happened instead of freezing here.
+        if review_url:
+            return (
+                f'<a class="badge sev-pending escalation-badge" style="text-decoration:none" '
+                f'data-escalation-id="{_esc(escalation_id)}" href="{_esc(review_url)}">Review this &rarr;</a>'
+            )
         return (
             f'<span class="badge sev-pending escalation-badge" '
-            f'data-escalation-id="{_esc(escalation_id)}">Awaiting internal review</span>'
+            f'data-escalation-id="{_esc(escalation_id)}">Awaiting review</span>'
         )
-    return '<span class="badge sev-pending">Awaiting internal review</span>'
+    return '<span class="badge sev-pending">Awaiting review</span>'
 
 
-def _finding_row(index: int, r: RankedFinding, ticket: str | None, escalation_id: str | None = None) -> str:
+def _finding_row(
+    index: int,
+    r: RankedFinding,
+    ticket: str | None,
+    escalation_id: str | None = None,
+    review_url: str | None = None,
+) -> str:
     sev = r.severity.lower()
     rail_color = theme.SEVERITY_VAR.get(sev, "var(--muted)")
     return f"""<tr>
@@ -236,7 +246,7 @@ def _finding_row(index: int, r: RankedFinding, ticket: str | None, escalation_id
   <td>{_esc(r.page_url)}</td>
   <td class="num mono">{r.risk_score:.0f}</td>
   <td class="fix-cell">{_esc(r.suggested_fix)}</td>
-  <td>{_status_badge(ticket, escalation_id)}</td>
+  <td>{_status_badge(ticket, escalation_id, review_url)}</td>
 </tr>"""
 
 
@@ -316,12 +326,21 @@ async def draft_report(
     ranked: list[RankedFinding],
     ticket_by_finding: dict[int, str | None] | None = None,
     escalation_by_finding: dict[int, str] | None = None,
+    job_id: str | None = None,
+    review_token: str | None = None,
 ) -> str:
     """The fixed report template -- same structure every run, only the data
     changes. Single format (HTML): easiest to generate reliably, opens
     anywhere, and is the one genuinely user-friendly format a business
     owner would actually read. The template itself is fixed; only the
     executive summary is LLM-generated.
+
+    job_id + review_token, when both given, turn each pending finding's
+    badge into a real link to that scan's own scoped review page (see
+    firestore_client.verify_review_token) -- the scan's owner reviews
+    their own uncertain findings immediately, not an admin on their
+    behalf. Either being None (e.g. no owner_contact on the job) falls
+    back to a plain non-clickable badge.
     """
     ticket_by_finding = ticket_by_finding or {}
     escalation_by_finding = escalation_by_finding or {}
@@ -334,11 +353,17 @@ async def draft_report(
         counts[r.severity.lower()] = counts.get(r.severity.lower(), 0) + 1
     p_counts = theme.principle_counts([r.wcag_criterion for r in ranked])
 
+    def _review_url(index: int) -> str | None:
+        escalation_id = escalation_by_finding.get(index)
+        if not (escalation_id and job_id and review_token):
+            return None
+        return f"{_APP_BASE_URL}/review/link/{job_id}/{review_token}/{escalation_id}"
+
     if not ranked:
         findings_section = '<div class="empty">No confirmed findings on the pages checked.</div>'
     else:
         rows = "".join(
-            _finding_row(i, r, ticket_by_finding.get(i), escalation_by_finding.get(i))
+            _finding_row(i, r, ticket_by_finding.get(i), escalation_by_finding.get(i), _review_url(i))
             for i, r in enumerate(ranked)
         )
         findings_section = f"""<table class="findings-table">

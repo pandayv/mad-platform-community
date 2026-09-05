@@ -71,6 +71,7 @@ def send_report_email(
     url: str,
     report_html: str,
     review_lines: list[str] | None = None,
+    review_url: str | None = None,
 ) -> None:
     """The full report, delivered to whoever submitted the scan. report_html
     is the same HTML already generated for the web report (see
@@ -79,7 +80,11 @@ def send_report_email(
     never drift apart. review_lines, when given, is rendered as a short
     plain-language summary block above the report (what's pending, why),
     since a business owner who never opens the review link should still
-    know something needs their attention.
+    know something needs their attention. review_url is that owner's own
+    scoped review-queue link (see firestore_client.verify_review_token) --
+    without it, the block still explains what's pending but has nothing
+    to click, since the report's own inline per-finding links are the
+    only way to act.
 
     Best-effort like the Slack functions above: missing RESEND_API_KEY or
     a delivery failure is logged and swallowed, never raised -- a report
@@ -94,12 +99,16 @@ def send_report_email(
     review_block = ""
     if review_lines:
         items = "".join(f"<li>{line}</li>" for line in review_lines)
+        action = (
+            f"<p><a href='{review_url}' style='font-weight:600'>Review these now &rarr;</a></p>"
+            if review_url
+            else "<p>Confirm or dismiss these from the report below.</p>"
+        )
         review_block = (
             "<div style='background:#FFF7ED;border:1px solid #FDBA74;"
             "border-radius:8px;padding:16px;margin-bottom:20px'>"
             "<strong>A few findings need your review</strong>"
-            f"<ul>{items}</ul>"
-            "<p>Use the private review link from your scan confirmation to confirm or dismiss these.</p>"
+            f"<ul>{items}</ul>{action}"
             "</div>"
         )
 

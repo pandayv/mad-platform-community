@@ -37,7 +37,13 @@ logger = logging.getLogger("mad_platform.orchestrator")
 
 MAX_ADDITIONAL_PAGES = 2
 
-_APP_BASE_URL = os.environ["MAD_APP_BASE_URL"]  # no fallback default on purpose, see action_agent.py
+_APP_BASE_URL = os.environ["MAD_APP_BASE_URL"]  # no fallback default on purpose:
+# the original hackathon build defaulted this to its own Cloud Run URL, which meant a
+# fork that forgot to set it would silently generate report/review links pointing at
+# the wrong (frozen) deployment instead of failing loudly. Fails fast at import time
+# now if unset, rather than embedding a wrong or missing URL into a link a real user
+# might click. Same fix applied to reporter.py and pattern_miner.py's own reads of
+# this variable.
 
 
 class _PageSelection(BaseModel):
@@ -335,19 +341,19 @@ async def run_one_time_scan(
 
         logger.info("[%s] Phase: filing_tickets (%d ranked finding(s))", job_id, len(ranked))
         fs.set_job_phase(job_id, "filing_tickets")
-        filing = route_and_file(issue_sink, ranked)
+        filing = route_and_file(issue_sink, ranked, job_id)
         logger.info(
-            "[%s] Filed %d ticket(s), %d escalated to SME review",
+            "[%s] Filed %d ticket(s), %d awaiting owner review",
             job_id, len(filing["filed"]) + len(filing["already_filed"]), len(filing["escalated"]),
         )
         for _index, finding, ticket_id in filing["filed"]:
             logger.info("[%s] Jira ticket filed: %s (WCAG %s)", job_id, ticket_id, finding.wcag_criterion)
         for _index, finding, escalation_id in filing["escalated"]:
             logger.info(
-                "[%s] Escalated to SME review: %s (WCAG %s)", job_id, escalation_id, finding.wcag_criterion
+                "[%s] Awaiting owner review: %s (WCAG %s)", job_id, escalation_id, finding.wcag_criterion
             )
 
-        # Build finding index -> ticket (or None if pending SME review),
+        # Build finding index -> ticket (or None if pending owner review),
         # so the report reflects what actually happened rather than a
         # stale "not filed yet" placeholder. Escalated findings also get
         # their escalation id, so the report can check on the outcome
@@ -360,9 +366,14 @@ async def run_one_time_scan(
             ticket_by_finding[index] = None
             escalation_by_finding[index] = escalation_id
 
+        job_record = fs.get_job(job_id) or {}
+        review_token = job_record.get("review_token")
+
         logger.info("[%s] Phase: generating_report (Gemini call)", job_id)
         fs.set_job_phase(job_id, "generating_report")
-        report = await draft_report(url, ranked, ticket_by_finding, escalation_by_finding)
+        report = await draft_report(
+            url, ranked, ticket_by_finding, escalation_by_finding, job_id=job_id, review_token=review_token
+        )
         report_uri = storage_client.save_report(job_id, report)
         logger.info("[%s] Report saved: %s", job_id, report_uri)
         fs.complete_job(job_id)
@@ -373,19 +384,21 @@ async def run_one_time_scan(
             [
                 f"{len(ranked)} confirmed finding(s) across {len(pages)} page(s)",
                 f"Filed automatically: {len(filing['filed']) + len(filing['already_filed'])}",
-                f"Escalated to SME review: {len(filing['escalated'])}",
+                f"Awaiting owner review: {len(filing['escalated'])}",
                 f"Report: {_APP_BASE_URL}/report/{job_id}",
             ],
         )
 
-        job_record = fs.get_job(job_id) or {}
         recipient = job_record.get("owner_contact")
         if recipient:
             review_lines = [
                 f"WCAG {ranked[index].wcag_criterion} on {ranked[index].page_url}"
                 for index, _finding, _escalation_id in filing["escalated"]
             ]
-            notify.send_report_email(recipient, url, report, review_lines=review_lines)
+            review_url = (
+                f"{_APP_BASE_URL}/review/link/{job_id}/{review_token}" if review_lines and review_token else None
+            )
+            notify.send_report_email(recipient, url, report, review_lines=review_lines, review_url=review_url)
     except Exception as exc:  # noqa: BLE001
         if job_id is not None:  # only unset if fs.create_job itself is what failed
             fs.fail_job(job_id, str(exc))

@@ -18,21 +18,12 @@ calls, no LLM judgment of its own.
 from __future__ import annotations
 
 import hashlib
-import os
 
 from mad_platform.agents.reporter import RankedFinding
 from mad_platform.state import firestore_client as fs
-from mad_platform.tools import notify
 from mad_platform.tools.issue_sink import IssueSink
 
 LOW_CONFIDENCE_THRESHOLD = 0.6
-
-_APP_BASE_URL = os.environ["MAD_APP_BASE_URL"]  # no fallback default on purpose, see DECISIONS_LOG.md:
-# the original hackathon build defaulted this to its own Cloud Run URL, which meant a
-# fork that forgot to set it would silently generate report/review links pointing at
-# the wrong (frozen) deployment instead of failing loudly. Fails fast at import time
-# now if unset, rather than embedding a wrong or missing URL into a link a real user
-# might click.
 
 
 def idempotency_key(page_url: str, finding: RankedFinding) -> str:
@@ -59,7 +50,7 @@ def _ticket_description(finding: RankedFinding) -> str:
     )
 
 
-def route_and_file(sink: IssueSink, ranked: list[RankedFinding]) -> dict[str, list]:
+def route_and_file(sink: IssueSink, ranked: list[RankedFinding], job_id: str) -> dict[str, list]:
     """The single escalation gate + idempotent filing for the autonomous
     majority. Returns {"filed": [(index, finding, ticket_id)], "escalated":
     [(index, finding, escalation_id)], "already_filed": [(index, finding, ticket_id)]}
@@ -67,6 +58,13 @@ def route_and_file(sink: IssueSink, ranked: list[RankedFinding]) -> dict[str, li
     rather than left for callers to re-derive via value lookup (fragile if
     two findings ever have identical field values, e.g. near-duplicate
     findings from the same page).
+
+    job_id scopes each escalated finding to the scan that produced it --
+    see firestore_client.create_escalation's docstring. No Slack alert for
+    these anymore: the scan's own owner sees a pending finding immediately
+    on their report and in their email (a real, working link to their own
+    scoped review page, not a page to an admin who isn't the one meant to
+    resolve it).
     """
     result: dict[str, list] = {"filed": [], "escalated": [], "already_filed": []}
 
@@ -91,14 +89,7 @@ def route_and_file(sink: IssueSink, ranked: list[RankedFinding]) -> dict[str, li
                     "risk_rationale": finding.risk_rationale,
                     "suggested_fix": finding.suggested_fix,
                 },
-            )
-            notify.alert(
-                "Accessibility finding needs SME review",
-                [
-                    f"WCAG {finding.wcag_criterion} — {finding.severity} — {finding.page_url}",
-                    f"Editor confidence: {finding.editor_confidence:.2f}",
-                    f"Review: {_APP_BASE_URL}/review/{key}",
-                ],
+                job_id=job_id,
             )
             result["escalated"].append((index, finding, key))
             continue

@@ -34,13 +34,10 @@ async def main() -> None:
     elif result["action"] == "initialized":
         print(f"First run -- recorded current version as WCAG {result['version']}.")
     elif result["action"] == "auto_refreshed":
-        print(f"WCAG {result['old_version']} -> {result['new_version']}: auto-refreshed (classified minor, high confidence).")
+        print(f"WCAG {result['old_version']} -> {result['new_version']}: auto-refreshed (classified {result['change_type']}, confidence {result['confidence']:.2f}).")
         print(f"Reasoning: {result['reasoning']}")
-    elif result["action"] == "escalated":
-        print(f"WCAG {result['old_version']} -> {result['new_version']}: escalated for human review.")
-        print(f"Reasoning: {result['reasoning']}")
-        print(f"Escalation ID: {result['escalation_id']}")
-        print("Use review_escalations.py --list / --resolve to confirm or dismiss.")
+        if result["change_type"] == "major":
+            print("This is a structural/conformance-model shift -- the curated corpus content itself may need a manual update, not just re-embedding.")
 
 
 if __name__ == "__main__":

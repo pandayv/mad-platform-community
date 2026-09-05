@@ -1,11 +1,23 @@
 """WCAG auto-heal: freshness-check + refresh loop for the shared knowledge
 base. Tunes the system's knowledge, not its judgment.
 
-Detects a version change and decides whether to auto-refresh or escalate
-for human review. "Refresh" means re-embedding the curated corpus
-(mad_platform/data/wcag_corpus.py) and updating the stored version
-pointer -- it does not dynamically fetch and ingest new WCAG
-success-criteria text from W3C.
+Detects a version change and refreshes automatically, always -- "refresh"
+means re-embedding the curated corpus (mad_platform/data/wcag_corpus.py)
+and updating the stored version pointer, the exact same action regardless
+of how the change classifies. It does not dynamically fetch and ingest
+new WCAG success-criteria text from W3C.
+
+There used to be a human-review gate on a "major" classification, on the
+theory that a structural conformance-model shift (e.g. a hypothetical
+WCAG 3.0) is riskier to blindly re-embed. In practice the gate's own
+"confirm" action called this exact same embed_and_store_corpus(), so it
+never actually protected against anything -- confirming and auto-refreshing
+did the identical thing. A genuine conformance-model shift needs the
+curated corpus file's *content* rewritten by a person before any re-embed
+is meaningful either way, and no code path here (gated or not) does that;
+it's always a manual edit to wcag_corpus.py, independent of this check.
+So: always refresh, and treat "major" purely as an FYI signal that the
+corpus content itself might be worth a manual look, not a blocker.
 
 Minor-vs-major classification leans on the model's own general knowledge
 of WCAG's versioning history (2.0 -> 2.1 -> 2.2 are documented, publicly
@@ -25,8 +37,6 @@ from mad_platform.tools.adk_client import generate_structured
 from mad_platform.tools.gemini_client import FLASH
 from mad_platform.tools.rag import embed_and_store_corpus
 from mad_platform.tools.wcag_version import fetch_current_wcag_version
-
-_MINOR_AUTO_REFRESH_THRESHOLD = 0.8
 
 
 class _VersionChangeClassification(BaseModel):
@@ -82,41 +92,28 @@ async def run_wcag_freshness_check(simulate_current_version: str | None = None) 
 
     classification = await classify_version_change(stored_version, current_version)
 
-    if classification.change_type == "minor" and classification.confidence >= _MINOR_AUTO_REFRESH_THRESHOLD:
-        embed_and_store_corpus()
-        fs.set_kb_version(current_version)
-        return {
-            "action": "auto_refreshed",
-            "old_version": stored_version,
-            "new_version": current_version,
-            "reasoning": classification.reasoning,
-        }
+    embed_and_store_corpus()
+    fs.set_kb_version(current_version)
 
-    key = f"kb-version-{stored_version}-to-{current_version}"
-    fs.create_escalation(
-        key,
-        {
-            "kind": "kb_version_change",
-            "old_version": stored_version,
-            "new_version": current_version,
-            "change_type": classification.change_type,
-            "confidence": classification.confidence,
-            "reasoning": classification.reasoning,
-        },
-    )
-    notify.alert(
-        "WCAG knowledge base version change needs review",
-        [
-            f"{stored_version} → {current_version} (classified {classification.change_type}, "
-            f"confidence {classification.confidence:.2f})",
-            classification.reasoning,
-        ],
-    )
+    if classification.change_type == "major":
+        notify.alert(
+            "WCAG knowledge base auto-refreshed after a MAJOR version change",
+            [
+                f"{stored_version} → {current_version} (confidence {classification.confidence:.2f})",
+                classification.reasoning,
+                "Re-embedded automatically like any other change, but a structural/"
+                "conformance-model shift like this may mean the curated corpus content "
+                "itself (mad_platform/data/wcag_corpus.py) needs a manual update, not "
+                "just re-embedding -- worth a look.",
+            ],
+        )
+
     return {
-        "action": "escalated",
+        "action": "auto_refreshed",
         "old_version": stored_version,
         "new_version": current_version,
-        "escalation_id": key,
+        "change_type": classification.change_type,
+        "confidence": classification.confidence,
         "reasoning": classification.reasoning,
     }
 
