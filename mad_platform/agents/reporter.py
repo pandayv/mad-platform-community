@@ -278,6 +278,9 @@ header .meta {{ color: var(--muted); font-size: 13.5px; margin-top: 4px; }}
   MAD Platform is autonomous, AI-assisted WCAG accessibility scanning with independent
   verification before anything is reported. Findings are sorted by real-world risk,
   not raw technical severity alone.
+  <p style="margin-top:10px">This scan was free, no account needed. If it saved you the
+  cost of a manual audit, you can <a href="https://buymeacoffee.com/madplatform"
+  target="_blank" rel="noopener">buy the project a coffee</a>.</p>
 </footer>
 <script>
 // Findings under internal review show "Awaiting internal review" as of

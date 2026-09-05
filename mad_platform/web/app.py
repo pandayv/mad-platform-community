@@ -119,6 +119,7 @@ def _site_header(active: str = "/", show_cta: bool = True) -> str:
 
 def _site_footer() -> str:
     links = "".join(f'<a href="{href}">{label}</a>' for href, label in _NAV_LINKS)
+    links += '<a href="https://buymeacoffee.com/madplatform" target="_blank" rel="noopener">Buy us a coffee</a>'
     return f"""<footer class="site-footer"><div class="site-footer-inner">
   <span>MAD Platform &middot; built during Google's All Things Agentic Hackathon, now free to use</span>
   <nav>{links}</nav>

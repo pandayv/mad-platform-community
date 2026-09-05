@@ -1,54 +1,44 @@
-# MAD Platform
+# MAD Platform — Community Edition
 
 **Multi-Agent Defense Platform, for accessibility compliance.** An
 autonomous agent that scans a website for accessibility problems,
 verifies its own findings, and takes real action on what's confirmed, not
-just a report.
+just a report. Free, no account needed.
 
-Built for the [All Things Agentic Hackathon](https://allthingsagentichackathon.devpost.com/)
-on Gemini, Google's Agent Development Kit (ADK), and Google Cloud.
+Originally built for the [All Things Agentic Hackathon](https://allthingsagentichackathon.devpost.com/)
+on Gemini, Google's Agent Development Kit (ADK), and Google Cloud; this is
+the ongoing community fork, running as a free public tool.
 
 ---
 
 ## Try it live
 
-**[Live scanner](https://scan-onboarding-803013053073.us-central1.run.app):**
-paste in a URL and watch it scan. Access is gated by a code (a
-deliberate security measure, see *Tech stack* below).
+**[Live scanner](https://scan-onboarding-531805458979.us-central1.run.app):**
+paste in a URL, give an email address to receive the report, and watch it
+scan. No account, no access code, free.
 
-**[Internal review queue](https://scan-onboarding-803013053073.us-central1.run.app/review):**
-where the low-confidence or critical findings the pipeline can't fully
-autonomize land for a human to confirm or dismiss. Gated by a separate
-code from the scan form above, intentionally not customer-facing.
+**[Guardian Pest Control](https://pandayv.github.io/mad-platform-community/):**
+a small fictional business site, seeded with real accessibility
+violations, built to give the scanner a consistent, reliable target.
 
-**[Guardian Pest Control](https://pandayv.github.io/mad-platform/):** a
-small fictional business site, seeded with real accessibility violations,
-built to give the scanner a consistent, reliable target ([`docs/`](docs/)).
-
-**[Architecture diagram](https://pandayv.github.io/mad-platform/architecture.html):**
+**[Architecture diagram](https://pandayv.github.io/mad-platform-community/architecture.html):**
 the full pipeline, the WCAG auto-heal loop, and the Google Cloud
 infrastructure behind it.
 
 ### Testing it yourself
 
-Here's the fast path to seeing it work end to end. Access codes for the
-scanner and review queue are provided in the Devpost submission, not
-here.
-
-1. Open the live scanner above, enter the access code, and submit a
-   URL. The demo site works well, or try any real one.
+1. Open the live scanner above and submit a URL. The demo site above
+   works well, or try any real one.
 2. Watch the status page track live progress. A multi-page scan usually
    takes one to three minutes, depending on how many pages get selected
    and real-time model latency.
-3. On the completed report, every confirmed finding shows a
-   "Filed: [ticket key]" badge, a real Jira ticket created live by that
-   scan, no Jira account needed to see it.
-4. Anything marked "Awaiting internal review" can be resolved at the
-   review queue above. Confirming or dismissing it updates the report's
-   badge in real time.
-
-Slack alerts post to a private workspace channel and can't be opened by
-an outside tester; see the demo video for that part.
+3. On the completed report, every confirmed finding is listed with a
+   suggested fix and a status. Anything flagged "Awaiting internal
+   review" is a low-confidence or critical finding a human hasn't
+   confirmed yet.
+4. The report and a CSV of confirmed findings (in Jira's importer column
+   format, so it drops straight into a real ticket tracker if you have
+   one) get emailed to the address the scan was submitted with.
 
 ## The problem
 
@@ -61,7 +51,7 @@ anything; someone still has to turn it into work that gets done.
 
 MAD Platform removes that blind spot: point it at a URL, and it finds real
 issues, checks its own work before trusting it, explains what matters most
-in plain language, and files the confirmed ones as tickets automatically,
+in plain language, and hands you the confirmed ones ready to act on,
 while routing the genuinely uncertain ones to a human instead of guessing.
 
 ## Guiding principles
@@ -125,26 +115,37 @@ what's actually running, not just stated intent.
 4. **Produces an actionable report:** a styled, self-contained HTML
    report with an overall score, severity breakdown, plain-English
    executive summary, and a concrete suggested fix per finding.
-5. **Takes real action.** Files a ticket automatically for every
-   confirmed finding; routes the low-confidence or critical minority to a
-   human reviewer instead, who can confirm or dismiss.
+5. **Takes real action.** Exports every confirmed finding as a CSV in
+   Jira's importer column format and emails the full report; routes the
+   low-confidence or critical minority to a human reviewer instead, who
+   can confirm or dismiss.
 6. **Recovers from failure.** A scan interrupted mid-way (crash, redeploy)
    resumes from its last completed checkpoint rather than starting over or
    silently duplicating work.
-7. **Keeps its own reference material current.** Periodically checks
-   whether the WCAG standard itself has changed, auto-refreshing for minor
-   additive updates and routing structural changes to human review before
-   acting on them.
+7. **Keeps its own reference material current.** A separate scheduled
+   service checks whether the WCAG standard itself has changed,
+   auto-refreshing for minor additive updates and routing structural
+   changes to human review before acting on them.
 
-## Try it yourself: what a scan looks like
+## What a scan looks like
 
-Paste a URL into the web app, and watch it work:
+Paste a URL into the web app:
 
-![Scan in progress, with live phase labels and per-page checklist](assets/screenshot-progress.png)
+![MAD Platform homepage: hero scan form, community-edition badge](assets/screenshot-homepage-hero.png)
 
-When it's done, you get a score, a severity breakdown, and the full report:
+Watch it work, with live phase labels and a per-page checklist:
 
-![Completed scan result](assets/screenshot-completed.png)
+![Scan in progress: analyzing pages for accessibility issues](assets/screenshot-progress.png)
+
+When it's done, you get a score, a severity breakdown, and a ranked list
+of findings with suggested fixes:
+
+![Completed scan result: site score, severity breakdown, executive summary](assets/screenshot-completed.png)
+
+The homepage also lays out how the free tool stacks up against other
+scanners, backed by things actually checked, not marketing copy:
+
+![How we compare: MAD Platform vs. free scanners vs. paid audit tools](assets/screenshot-how-we-compare.png)
 
 ## Tech stack
 
@@ -164,15 +165,20 @@ When it's done, you get a score, a severity breakdown, and the full report:
   (daily) and the dismissal-pattern miner (weekly)
 - **Browser automation:** Playwright, for headless rendering, screenshots,
   and computed-style extraction for real contrast-ratio checking
-- **Web:** FastAPI, powering the scan-submission UI and status API
-- **Ticketing:** Jira REST API, behind an abstraction (`IssueSink`) so a
-  second tracker could be added without touching Orchestrator or Reporter
-- **Notifications:** Slack, via an incoming webhook: a real-time alert
-  when a finding or a WCAG version change is escalated to a human, a
-  summary posted when a scan completes
-- **Security:** the public scan endpoint requires an access code (Secret
-  Manager) and the crawler refuses to fetch private/internal network
-  addresses
+- **Web:** FastAPI, powering the scan-submission UI, status API, and
+  marketing/FAQ/legal pages
+- **Ticketing:** CSV export by default, in Jira's importer column format,
+  so confirmed findings drop straight into a real tracker with no account
+  needed; a real `JiraIssueSink` also exists in code as an opt-in for
+  anyone self-hosting this with their own Jira Cloud instance
+- **Notifications:** Email via Resend, sending the full report to the
+  address a scan was submitted with; Slack (an incoming-webhook alert on
+  escalation, a summary on completion) exists in code as an opt-in,
+  neither is required
+- **Security:** the crawler refuses to fetch private/internal network
+  addresses; an access-code gate (Secret Manager) on the scan form and
+  review queue exists in code as an opt-in for anyone who wants to run a
+  private instance instead of a public one
 
 ## Setting this up yourself
 
@@ -181,9 +187,12 @@ When it's done, you get a score, a severity breakdown, and the full report:
 - A Google Cloud project with billing enabled.
 - The `gcloud` CLI, installed and authenticated (`gcloud auth login`).
 - Python 3.10+ locally (the ADK toolchain needs it).
-- Optional, for real ticket filing and notifications: a free Jira Cloud
-  account and a Slack workspace. Without these, the pipeline runs against
-  a mock ticket sink and skips notifications, everything else works.
+- Optional, for real email delivery: a free [Resend](https://resend.com)
+  account and API key. Without it, reports still generate and display in
+  the browser; only the emailed copy is skipped.
+- Optional, for a private instance instead of a public one: an access
+  code (Secret Manager), and/or a real Jira Cloud account and Slack
+  workspace instead of the default CSV export.
 
 **IMPORTANT:** Replace `YOUR_PROJECT_ID` below with your actual GCP project
 ID, the only value you need to choose here.
@@ -205,8 +214,8 @@ gcloud config set project "$PROJECT_ID"
 ### 1. Clone and set up the local environment
 
 ```bash
-git clone https://github.com/pandayv/mad-platform.git
-cd mad-platform
+git clone https://github.com/pandayv/mad-platform-community.git
+cd mad-platform-community
 python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 playwright install --with-deps chromium
@@ -258,9 +267,9 @@ python run_scan.py https://example.com
 ```
 
 This exercises the real pipeline end to end against your real GCP
-project (Vertex AI, Firestore) with a mock ticket sink, no Cloud Run
-deployment needed yet. Confirms steps 2-4 actually worked before you
-spend time deploying.
+project (Vertex AI, Firestore) with the default CSV ticket sink, no
+Cloud Run deployment needed yet. Confirms steps 2-4 actually worked
+before you spend time deploying.
 
 ### 6. Create an Artifact Registry repo for the container images
 
@@ -276,10 +285,6 @@ gcloud projects add-iam-policy-binding "$PROJECT_ID" \
 
 ### 7. Deploy `scan-onboarding` (the public app)
 
-**IMPORTANT:** Replace `YOUR_ACCESS_CODE` and `YOUR_REVIEW_CODE` below with
-your own values, or the ones from the Devpost submission to reproduce the
-exact demo a judge is testing.
-
 ```bash
 gcloud iam service-accounts create scan-onboarding-sa
 SA_ONBOARDING="scan-onboarding-sa@${PROJECT_ID}.iam.gserviceaccount.com"
@@ -291,20 +296,6 @@ gcloud projects add-iam-policy-binding "$PROJECT_ID" \
 gcloud storage buckets add-iam-policy-binding "gs://${PROJECT_ID}-reports" \
   --member="serviceAccount:${SA_ONBOARDING}" --role="roles/storage.objectAdmin"
 
-# The one thing standing between the public --allow-unauthenticated
-# endpoint and someone using it as a free Gemini-calling, Playwright-
-# fetching open relay. printf, not `openssl rand -hex 12`, which stores
-# a trailing newline the app's comparison never strips, so the code it
-# generates could never actually be typed back in correctly.
-printf '%s' "YOUR_ACCESS_CODE" | gcloud secrets create mad-ui-access-code --data-file=-
-# A separate code for the internal SME review queue -- deliberately not
-# the same code, so having one doesn't imply having the other:
-printf '%s' "YOUR_REVIEW_CODE" | gcloud secrets create mad-review-code --data-file=-
-for secret in mad-ui-access-code mad-review-code; do
-  gcloud secrets add-iam-policy-binding "$secret" \
-    --member="serviceAccount:${SA_ONBOARDING}" --role="roles/secretmanager.secretAccessor"
-done
-
 gcloud builds submit --tag="us-central1-docker.pkg.dev/${PROJECT_ID}/mad-platform/scan-onboarding" \
   --region=us-central1 .
 gcloud run deploy scan-onboarding \
@@ -312,9 +303,15 @@ gcloud run deploy scan-onboarding \
   --region=us-central1 --service-account="$SA_ONBOARDING" \
   --no-cpu-throttling --memory=1Gi --concurrency=4 --max-instances=3 --min-instances=0 \
   --set-env-vars=GCS_BUCKET_NAME="${PROJECT_ID}-reports",GOOGLE_CLOUD_PROJECT="${PROJECT_ID}" \
-  --set-secrets=MAD_ACCESS_CODE=mad-ui-access-code:latest,MAD_REVIEW_CODE=mad-review-code:latest \
   --allow-unauthenticated
 ```
+
+No access code is required by default (`MAD_ACCESS_CODE` /
+`MAD_REVIEW_CODE` unset) — this deploys a fully public, free instance,
+matching the live one above. If you want a private instance instead, set
+those two as Secret Manager secrets and pass them with `--set-secrets`
+(see the codebase's `_ACCESS_CODE` / `_REVIEW_CODE` in
+`mad_platform/web/app.py` for exact env var names).
 
 ### 8. Deploy `scan-wcag-poller` and its daily-freshness Scheduler trigger
 
@@ -338,7 +335,8 @@ gcloud builds submit --config=cloudbuild.wcag_poller.yaml --region=us-central1 \
 gcloud run deploy scan-wcag-poller \
   --image="us-central1-docker.pkg.dev/${PROJECT_ID}/mad-platform/scan-wcag-poller:latest" \
   --region=us-central1 --service-account="$SA_WCAG" --memory=512Mi --max-instances=1 \
-  --set-env-vars=GOOGLE_CLOUD_PROJECT="${PROJECT_ID}"
+  --set-env-vars=GOOGLE_CLOUD_PROJECT="${PROJECT_ID}" \
+  --no-allow-unauthenticated
 
 gcloud run services add-iam-policy-binding scan-wcag-poller --region=us-central1 \
   --member="serviceAccount:${SA_SCHEDULER}" --role="roles/run.invoker"
@@ -385,10 +383,17 @@ gcloud scheduler jobs create http pattern-miner-tick \
 To see it run immediately rather than waiting for the schedule:
 `gcloud run jobs execute pattern-miner --region=us-central1 --wait`.
 
-### 10. Optional: connect Jira and Slack
+### 10. Optional: real email delivery, and swapping CSV for Jira/Slack
 
-Jira, for real ticket filing instead of the mock sink. Create an API
-token at `id.atlassian.com/manage-profile/security/api-tokens`, then:
+Email, via [Resend](https://resend.com) — without this, reports still
+generate and display in the browser, only the emailed copy is skipped.
+
+```bash
+printf '%s' "YOUR_RESEND_API_KEY" | gcloud secrets create resend-api-key --data-file=-
+```
+
+Jira, for real ticket filing instead of the default CSV export. Create an
+API token at `id.atlassian.com/manage-profile/security/api-tokens`, then:
 
 ```bash
 printf '%s' "https://YOUR-SITE.atlassian.net" | gcloud secrets create jira-url --data-file=-
@@ -397,9 +402,9 @@ printf '%s' "YOUR_API_TOKEN" | gcloud secrets create jira-api-token --data-file=
 printf '%s' "YOUR_PROJECT_KEY" | gcloud secrets create jira-project-key --data-file=-
 ```
 
-Slack, for real-time alerts and scan-complete summaries. Create an
-Incoming Webhook at `api.slack.com/apps` (your app, then Incoming
-Webhooks), then:
+Slack, for real-time alerts and scan-complete summaries alongside email.
+Create an Incoming Webhook at `api.slack.com/apps` (your app, then
+Incoming Webhooks), then:
 
 ```bash
 printf '%s' "https://hooks.slack.com/services/YOUR/WEBHOOK/URL" | \
@@ -409,19 +414,17 @@ printf '%s' "https://hooks.slack.com/services/YOUR/WEBHOOK/URL" | \
 Grant access and redeploy `scan-onboarding` with the new secrets:
 
 ```bash
-for secret in jira-url jira-email jira-api-token jira-project-key slack-webhook-url; do
+for secret in resend-api-key jira-url jira-email jira-api-token jira-project-key slack-webhook-url; do
   gcloud secrets add-iam-policy-binding "$secret" \
     --member="serviceAccount:${SA_ONBOARDING}" --role="roles/secretmanager.secretAccessor"
 done
-gcloud secrets add-iam-policy-binding slack-webhook-url \
-  --member="serviceAccount:${SA_MINER}" --role="roles/secretmanager.secretAccessor"
 
 gcloud run deploy scan-onboarding \
   --image="us-central1-docker.pkg.dev/${PROJECT_ID}/mad-platform/scan-onboarding:latest" \
   --region=us-central1 --service-account="$SA_ONBOARDING" \
   --no-cpu-throttling --memory=1Gi --concurrency=4 --max-instances=3 --min-instances=0 \
   --set-env-vars=GCS_BUCKET_NAME="${PROJECT_ID}-reports",GOOGLE_CLOUD_PROJECT="${PROJECT_ID}" \
-  --set-secrets=MAD_ACCESS_CODE=mad-ui-access-code:latest,MAD_REVIEW_CODE=mad-review-code:latest,JIRA_URL=jira-url:latest,JIRA_EMAIL=jira-email:latest,JIRA_API_TOKEN=jira-api-token:latest,JIRA_PROJECT_KEY=jira-project-key:latest,SLACK_WEBHOOK_URL=slack-webhook-url:latest \
+  --set-secrets=RESEND_API_KEY=resend-api-key:latest,JIRA_URL=jira-url:latest,JIRA_EMAIL=jira-email:latest,JIRA_API_TOKEN=jira-api-token:latest,JIRA_PROJECT_KEY=jira-project-key:latest,SLACK_WEBHOOK_URL=slack-webhook-url:latest \
   --allow-unauthenticated
 ```
 
@@ -440,7 +443,7 @@ mad_platform/
   agents/        # Orchestrator, Analyst, Editor, Reporter, Action Agent,
                   # WCAG auto-heal, Pattern Miner (Gemma persistent memory)
   tools/         # Crawler, rule checks, AI checks, ADK client, Gemma
-                  # client, RAG, WCAG version fetch, issue sink, Slack notify
+                  # client, RAG, WCAG version fetch, issue sink, Slack/email notify
   state/         # Firestore + Cloud Storage clients
   web/           # Scan-submission UI, status page, SME review queue,
                   # the WCAG-poller HTTP entrypoint, shared theme/charts
@@ -453,6 +456,14 @@ mine_patterns.py               # Manual trigger for the Gemma pattern miner
 Dockerfile / Dockerfile.wcag_poller / Dockerfile.pattern_miner
 cloudbuild.wcag_poller.yaml / cloudbuild.pattern_miner.yaml
 ```
+
+## Support this project
+
+MAD Platform Community is free, with no ads and no paywall on the actual
+scan. If it saved you the cost of a manual audit, you can leave a tip at
+[buymeacoffee.com/madplatform](https://buymeacoffee.com/madplatform) — a
+link to the same page is in the site footer and on every completed
+report.
 
 ## Scalability & roadmap
 
@@ -475,4 +486,4 @@ re-escalate identically on every future run.
 ## Built during the hackathon submission window
 
 Solo build by Vipul Panday, drawing on a professional background in risk
-management and compliance.
+management and compliance. Now maintained as a free community edition.
