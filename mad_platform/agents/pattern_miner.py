@@ -9,8 +9,15 @@ not the rarer SME escalation queue -- Editor already independently
 verifies every finding, so its own dismissal history is the high-volume,
 already-real signal for "Analyst keeps making the same mistake here."
 
-Deliberately local (see gemma_client.py): this is a periodic batch job
-with no live-request latency pressure, not a per-scan call.
+Runs on Gemini Flash via Vertex AI (adk_client), the same client every
+other judgment call in this pipeline uses. Originally a self-hosted
+Gemma via Ollama, kept as a separate model on purpose for the hackathon's
+own judging criteria; the community fork drops that in favor of a
+managed API call, since call volume here is low (one call per qualifying
+WCAG-criterion cluster, weekly) and a mis-assessed pattern silently
+shapes what Analyst flags on every future scan -- exactly the kind of
+low-volume, high-stakes judgment call this codebase's own tiering
+reserves for `FLASH`, not `FLASH_LITE`.
 
 A mined pattern never applies itself. It's proposed as a SME-review
 escalation (kind="learned_pattern", reusing the same review queue as
@@ -31,11 +38,12 @@ from collections import defaultdict
 from pydantic import BaseModel
 
 from mad_platform.state import firestore_client as fs
-from mad_platform.tools import gemma_client
 from mad_platform.tools import notify
+from mad_platform.tools.adk_client import generate_structured
+from mad_platform.tools.gemini_client import FLASH
 
 MIN_OCCURRENCES = 3  # fewer than this isn't a pattern, just one editor call
-SAMPLE_SIZE = 6  # rationales shown to Gemma per cluster -- enough to judge consistency, not the whole history
+SAMPLE_SIZE = 6  # rationales shown to Gemini per cluster -- enough to judge consistency, not the whole history
 CONFIDENCE_THRESHOLD = 0.75
 
 _APP_BASE_URL = os.environ.get(
@@ -82,14 +90,11 @@ def _pattern_key(criterion_code: str) -> str:
 
 
 async def mine_patterns() -> list[dict]:
-    """Clusters dismissed findings by WCAG criterion, asks Gemma to assess
+    """Clusters dismissed findings by WCAG criterion, asks Gemini to assess
     each cluster with enough volume, and escalates the consistent,
     high-confidence ones for SME review. Returns the newly-created
-    escalations (empty if Ollama isn't reachable or nothing qualifies).
+    escalations (empty if nothing qualifies).
     """
-    if not gemma_client.is_available():
-        return []
-
     dismissed = fs.iter_dismissed_findings()
     by_criterion: dict[str, list[dict]] = defaultdict(list)
     for f in dismissed:
@@ -108,7 +113,7 @@ async def mine_patterns() -> list[dict]:
         sample = findings[:SAMPLE_SIZE]
         rationales_text = "\n".join(f"{i + 1}. {f['rationale']}" for i, f in enumerate(sample))
         prompt = _ASSESS_PROMPT.format(criterion=code, rationales=rationales_text)
-        assessment = await gemma_client.generate_structured(prompt, _PatternAssessment)
+        assessment = await generate_structured(FLASH, prompt, _PatternAssessment)
 
         if not assessment.is_consistent_pattern or assessment.confidence < CONFIDENCE_THRESHOLD:
             continue

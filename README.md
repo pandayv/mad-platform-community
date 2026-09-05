@@ -68,9 +68,9 @@ what's actually running, not just stated intent.
   multimodal visual check, reasoning over the actual rendered screenshot.
 
 ### Fit for purpose
-- Three-tier model selection: `flash-lite` for high-volume calls, `flash`
-  for judgment calls worth the cost, and a self-hosted Gemma for a
-  background job mining dismissal patterns.
+- Two-tier model selection: `flash-lite` for high-volume calls, `flash`
+  for judgment calls worth the cost, including the low-volume weekly
+  batch job mining dismissal patterns.
 - Orchestration pattern chosen per step: sequential where order matters,
   parallel where it doesn't, dynamic delegation reserved for genuine
   judgment calls.
@@ -92,7 +92,7 @@ what's actually running, not just stated intent.
   infrastructure action, and the pipeline's own record.
 
 ### Self-improving
-- A self-hosted Gemma model mines Editor's real dismissal history for
+- A weekly batch job mines Editor's real dismissal history for
   recurring, consistent patterns; confirmed ones become permanent
   grounding for every scan that follows, not a one-time fix.
 - The WCAG knowledge base heals itself the same way: a scheduled check
@@ -149,15 +149,14 @@ scanners, backed by things actually checked, not marketing copy:
 
 ## Tech stack
 
-- **AI:** Gemini via Vertex AI (`gemini-3.5-flash-lite` for high-volume
-  calls, `gemini-3.7-flash` for judgment calls) for every real-time,
-  user-facing call; a self-hosted Gemma (`gemma3:4b` via Ollama, its own
-  Cloud Run Job) for the one background batch job (dismissal-pattern
-  mining) that has no live-latency pressure
+- **AI:** Gemini via Vertex AI for every call, real-time or batch
+  (`gemini-3.5-flash-lite` for high-volume calls, `gemini-3.7-flash` for
+  judgment calls, including the low-volume weekly pattern-mining job)
 - **Agent framework:** Google Agent Development Kit (ADK)
 - **Compute:** Cloud Run, two scale-to-zero services (`scan-onboarding`,
   `scan-wcag-poller`) split by trigger type and resource profile, plus
-  one Cloud Run Job (`pattern-miner`) for the Gemma batch miner
+  one lightweight Cloud Run Job (`pattern-miner`) for the weekly batch
+  miner
 - **State:** Firestore, for job checkpoints, findings, escalation queue,
   WCAG knowledge-base embeddings, and confirmed learned patterns
 - **Storage:** Cloud Storage, for generated reports
@@ -347,26 +346,28 @@ gcloud scheduler jobs create http scan-wcag-poller-tick \
   --http-method=POST --oidc-service-account-email="$SA_SCHEDULER"
 ```
 
-### 9. Deploy the Gemma pattern-miner (a Cloud Run Job, not a Service)
+### 9. Deploy the pattern-miner (a Cloud Run Job, not a Service)
 
-Self-hosted Gemma (Ollama, not Vertex AI), baked into its own image,
-run-to-completion rather than request-driven, since this is a periodic
-batch job with no live-request latency to protect.
+Run-to-completion rather than request-driven, since this is a periodic
+batch job with no live-request latency to protect. Calls Gemini Flash via
+Vertex AI, the same model tier as the pipeline's other judgment calls --
+no self-hosted model, no separate image-bake step, just a small Python
+image like `scan-wcag-poller`'s.
 
 ```bash
 gcloud iam service-accounts create pattern-miner-sa
 SA_MINER="pattern-miner-sa@${PROJECT_ID}.iam.gserviceaccount.com"
 gcloud projects add-iam-policy-binding "$PROJECT_ID" \
   --member="serviceAccount:${SA_MINER}" --role="roles/datastore.user"
+gcloud projects add-iam-policy-binding "$PROJECT_ID" \
+  --member="serviceAccount:${SA_MINER}" --role="roles/aiplatform.user"
 
-# Slower than the other two images on purpose: bakes gemma3:4b into the
-# image at build time (~5-10 min) so each execution doesn't pull it fresh.
 gcloud builds submit --config=cloudbuild.pattern_miner.yaml --region=us-central1 \
   --substitutions=_IMAGE="us-central1-docker.pkg.dev/${PROJECT_ID}/mad-platform/pattern-miner:latest" .
 gcloud run jobs create pattern-miner \
   --image="us-central1-docker.pkg.dev/${PROJECT_ID}/mad-platform/pattern-miner:latest" \
   --region=us-central1 --service-account="$SA_MINER" \
-  --memory=4Gi --cpu=4 --task-timeout=600 --max-retries=0 \
+  --memory=512Mi --cpu=1 --task-timeout=300 --max-retries=0 \
   --set-env-vars=GOOGLE_CLOUD_PROJECT="${PROJECT_ID}"
 
 gcloud run jobs add-iam-policy-binding pattern-miner --region=us-central1 \
@@ -441,9 +442,9 @@ Open that URL, submit a real site to scan, and confirm it completes.
 ```
 mad_platform/
   agents/        # Orchestrator, Analyst, Editor, Reporter, Action Agent,
-                  # WCAG auto-heal, Pattern Miner (Gemma persistent memory)
-  tools/         # Crawler, rule checks, AI checks, ADK client, Gemma
-                  # client, RAG, WCAG version fetch, issue sink, Slack/email notify
+                  # WCAG auto-heal, Pattern Miner (persistent memory)
+  tools/         # Crawler, rule checks, AI checks, ADK client, RAG,
+                  # WCAG version fetch, issue sink, Slack/email notify
   state/         # Firestore + Cloud Storage clients
   web/           # Scan-submission UI, status page, SME review queue,
                   # the WCAG-poller HTTP entrypoint, shared theme/charts
@@ -452,7 +453,7 @@ docs/            # Demo site + self-hosted architecture diagram (GitHub Pages)
 run_scan.py                    # CLI entry point for a one-time scan
 review_escalations.py          # SME review queue CLI (web UI is the primary surface)
 check_wcag_version.py          # Manual trigger for the WCAG freshness check
-mine_patterns.py               # Manual trigger for the Gemma pattern miner
+mine_patterns.py               # Manual trigger for the pattern miner
 Dockerfile / Dockerfile.wcag_poller / Dockerfile.pattern_miner
 cloudbuild.wcag_poller.yaml / cloudbuild.pattern_miner.yaml
 ```
@@ -472,7 +473,7 @@ on-demand, one-time, no registration. The natural next layer is
 registering a site for *recurring* monitoring instead of a single scan,
 and it's a smaller step than it sounds, since the scheduling and
 self-improvement infrastructure it would reuse is already running in
-production: the WCAG freshness check and the Gemma pattern-miner both
+production: the WCAG freshness check and the pattern-miner both
 already operate as independent Cloud Scheduler ticks against live state,
 not one-off scripts.
 

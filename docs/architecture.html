@@ -194,7 +194,7 @@ footer { margin-top: 24px; font-size: 12.5px; color: var(--ink-soft); font-famil
 
 <figure>
 <div class="diagram-frame">
-<svg viewBox="0 0 1260 660" role="img" aria-label="Three deployables. scan-onboarding, the always-on public Cloud Run service, runs the per-scan pipeline: a web form feeds Orchestrator, which fans out to Analyst's three parallel checks, merges into Editor for independent verification (with one capped retry back to Analyst), then Reporter ranks and drafts, then a route step either auto-exports a CSV of confirmed findings plus an emailed report, or sends low-confidence and critical findings to an SME review queue whose confirmations feed the same CSV and whose dismissals end there with a documented reason. Two separate scheduled deployables feed that pipeline asynchronously, not on every scan: scan-wcag-poller, woken daily by Cloud Scheduler, checks whether the WCAG standard changed and either auto-refreshes the knowledge base for a minor change or escalates a major one to the same SME queue; pattern-miner, a Cloud Run Job woken weekly by Cloud Scheduler, runs a self-hosted Gemma model over Editor's real dismissal history and, once a consistent pattern is confirmed, grounds Editor's prompt on every future scan." xmlns="http://www.w3.org/2000/svg" font-family="'Public Sans', sans-serif" fill="none" style="max-width:100%;height:auto">
+<svg viewBox="0 0 1260 660" role="img" aria-label="Three deployables. scan-onboarding, the always-on public Cloud Run service, runs the per-scan pipeline: a web form feeds Orchestrator, which fans out to Analyst's three parallel checks, merges into Editor for independent verification (with one capped retry back to Analyst), then Reporter ranks and drafts, then a route step either auto-exports a CSV of confirmed findings plus an emailed report, or sends low-confidence and critical findings to an SME review queue whose confirmations feed the same CSV and whose dismissals end there with a documented reason. Two separate scheduled deployables feed that pipeline asynchronously, not on every scan: scan-wcag-poller, woken daily by Cloud Scheduler, checks whether the WCAG standard changed and either auto-refreshes the knowledge base for a minor change or escalates a major one to the same SME queue; pattern-miner, a lightweight Cloud Run Job woken weekly by Cloud Scheduler, calls Gemini Flash over Editor's real dismissal history and, once a consistent pattern is confirmed, grounds Editor's prompt on every future scan." xmlns="http://www.w3.org/2000/svg" font-family="'Public Sans', sans-serif" fill="none" style="max-width:100%;height:auto">
 <defs>
   <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
     <path d="M0,0 L10,5 L0,10 z" fill="currentColor"></path>
@@ -307,7 +307,7 @@ footer { margin-top: 24px; font-size: 12.5px; color: var(--ink-soft); font-famil
 
   <rect x="845" y="465" width="200" height="65" rx="8" fill="var(--infra-tint)" stroke="var(--infra)"></rect>
   <text x="945" y="486" text-anchor="middle" fill="var(--infra)" font-weight="600" font-size="11.5">pattern-miner Job</text>
-  <text x="945" y="500" text-anchor="middle" font-size="10" fill="currentColor">self-hosted Gemma mines</text>
+  <text x="945" y="500" text-anchor="middle" font-size="10" fill="currentColor">Gemini Flash mines</text>
   <text x="945" y="513" text-anchor="middle" font-size="10" fill="currentColor">Editor's dismissal history</text>
 
   <line x1="1045" y1="497" x2="1077" y2="497" stroke="currentColor" marker-end="url(#arrow)"></line>
@@ -445,20 +445,20 @@ footer { margin-top: 24px; font-size: 12.5px; color: var(--ink-soft); font-famil
 
 <div class="zone">
   <div class="zone-label">Memory: Analyst/Editor's own judgment</div>
-  <div class="zone-note">Distinct from the knowledge base above: that loop keeps reference material current, this one tunes the pipeline's own behavior from its real history. A self-hosted Gemma, not Vertex AI: a background batch job with no live-request latency, exactly the workload Gemma's on-device design targets. Runs as a Cloud Run Job (<span class="mono">pattern-miner</span>), not a Service &mdash; woken weekly by its own Scheduler tick, run-to-completion, then exits.</div>
+  <div class="zone-note">Distinct from the knowledge base above: that loop keeps reference material current, this one tunes the pipeline's own behavior from its real history. Calls Gemini Flash via Vertex AI, the same tier reserved for judgment calls elsewhere in this pipeline &mdash; call volume here is low (one call per qualifying cluster, weekly), so a managed API beats maintaining a separate self-hosted model. Runs as a Cloud Run Job (<span class="mono">pattern-miner</span>), not a Service &mdash; woken weekly by its own Scheduler tick, run-to-completion, then exits.</div>
   <div class="loop-diagram">
     <div class="loop-node mono">Editor's dismissal history</div>
     <div class="loop-arrow">&rarr;</div>
     <div class="loop-node mono">Weekly Scheduler tick</div>
     <div class="loop-arrow">&rarr;</div>
-    <div class="loop-node mono">Cloud Run Job: self-hosted Gemma</div>
+    <div class="loop-node mono">Cloud Run Job: Gemini Flash</div>
     <div class="loop-arrow">&rarr;</div>
     <div class="loop-node decision mono">Consistent pattern?</div>
     <div class="loop-arrow">&rarr;</div>
     <div class="loop-node mono">SME Central Review Hub</div>
   </div>
   <div class="step-desc" style="margin-top:10px">Confirmed &rarr; grounds Editor's prompt on every future scan.</div>
-  <div class="lens-tags" style="margin-top:14px"><span class="lens-tag">persistent memory</span><span class="lens-tag">feedback loop: self-improving</span><span class="lens-tag">human approval before judgment changes</span><span class="lens-tag">Gemma, self-hosted</span></div>
+  <div class="lens-tags" style="margin-top:14px"><span class="lens-tag">persistent memory</span><span class="lens-tag">feedback loop: self-improving</span><span class="lens-tag">human approval before judgment changes</span></div>
 </div>
 
 <div class="zone">
@@ -473,10 +473,9 @@ footer { margin-top: 24px; font-size: 12.5px; color: var(--ink-soft); font-famil
     <div class="infra-item"><div class="name">Cloud Run</div><div class="role">2 scale-to-zero services (scan-onboarding, scan-wcag-poller) + 1 Job (pattern-miner), least-privilege per service</div></div>
     <div class="infra-item"><div class="name">Google ADK</div><div class="role">LlmAgent + Runner wraps every real-time Gemini call</div></div>
     <div class="infra-item"><div class="name">Vertex AI &middot; Gemini</div><div class="role">Flash-lite for volume, Flash for judgment calls</div></div>
-    <div class="infra-item"><div class="name">Ollama &middot; Gemma</div><div class="role">Self-hosted on the pattern-miner Job, the one background call, not real-time</div></div>
     <div class="infra-item"><div class="name">Firestore</div><div class="role">Job checkpoints, findings, escalations, KB version, learned patterns</div></div>
     <div class="infra-item"><div class="name">Cloud Storage</div><div class="role">Generated HTML reports</div></div>
-    <div class="infra-item"><div class="name">Cloud Scheduler</div><div class="role">WCAG freshness tick (daily), Gemma pattern-miner (weekly)</div></div>
+    <div class="infra-item"><div class="name">Cloud Scheduler</div><div class="role">WCAG freshness tick (daily), pattern-miner (weekly)</div></div>
     <div class="infra-item"><div class="name">Resend</div><div class="role">Emails the report to the address a scan was submitted with</div></div>
     <div class="infra-item"><div class="name">CSV export</div><div class="role">Default ticket sink &mdash; Jira's importer column format, no tracker account needed</div></div>
     <div class="infra-item"><div class="name">Playwright</div><div class="role">Headless render, screenshot, computed styles</div></div>

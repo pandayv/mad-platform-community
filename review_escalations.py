@@ -52,7 +52,7 @@ def list_pending() -> None:
             print(f"  Reasoning: {e['reasoning']}")
             print(f"  Why flagged: not a confident 'minor' classification -- needs review before re-embedding")
         elif e.get("kind") == "learned_pattern":
-            print(f"  Type: learned dismissal pattern (Gemma-mined)")
+            print(f"  Type: learned dismissal pattern (Gemini-mined)")
             print(f"  WCAG {e['wcag_criterion']}  seen {e['occurrence_count']} time(s)  confidence={e['confidence']:.2f}")
             print(f"  Pattern: {e['pattern_description']}")
             print(f"  Why flagged: needs confirmation before it grounds Editor's prompt on future scans")
