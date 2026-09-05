@@ -27,6 +27,10 @@ SUBMISSION_TEXT.md
 MASTER_CONTEXT.md
 VIDEO_SCRIPT.md
 architecture_diagrams/
+PENDING_TASKS.md
+_pre_rewrite_backup_20260904/
+DECISIONS_LOG.md
+CLAUDE.md
 
 # Claude Code local session state
 .claude/
