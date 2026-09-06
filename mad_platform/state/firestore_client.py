@@ -41,12 +41,21 @@ MAX_SCANS_PER_MONTH = 500  # a scan-count proxy for the $ budget, see DECISIONS_
 PAGE_STAGES = ["crawled", "analyzed", "verified"]
 
 
-def create_job(url: str, trigger_type: str = "one-time", owner_contact: str | None = None) -> str:
+def create_job(
+    url: str, trigger_type: str = "one-time", owner_contact: str | None = None, status: str = "in_progress"
+) -> str:
     """owner_contact is the submitter's email -- required by the community
     fork's /scan route (not enforced here, so internal/admin callers like
     the WCAG poller can still omit it). It's the one field that answers
     "who does this job belong to", used for both the report email and the
     per-job review link below.
+
+    status defaults to "in_progress" for callers that run the pipeline
+    synchronously in the same process (the WCAG poller, run_scan.py).
+    /scan passes "queued": the job exists and is visible on its status
+    page immediately, but the pipeline itself doesn't start until a
+    worker actually picks up the Cloud Tasks dispatch -- see
+    mark_job_started().
     """
     job_id = str(uuid.uuid4())
     now = datetime.now(timezone.utc)
@@ -54,7 +63,7 @@ def create_job(url: str, trigger_type: str = "one-time", owner_contact: str | No
         {
             "url": url,
             "trigger_type": trigger_type,
-            "status": "in_progress",
+            "status": status,
             "pages": {},
             "owner_contact": owner_contact,
             "review_token": secrets.token_urlsafe(24),
@@ -63,6 +72,19 @@ def create_job(url: str, trigger_type: str = "one-time", owner_contact: str | No
         }
     )
     return job_id
+
+
+def mark_job_started(job_id: str) -> None:
+    """queued -> in_progress, called by the scan worker the moment it
+    actually picks up a dispatched task -- distinct from create_job's
+    status because the two can now happen seconds or minutes apart, with
+    the job queued behind others in between. started_at (separate from
+    created_at) is what the status page's elapsed-time / "taking longer
+    than usual" warning anchors to -- using created_at there would count
+    queue wait time as if it were scan time.
+    """
+    now = datetime.now(timezone.utc)
+    _JOBS.document(job_id).update({"status": "in_progress", "started_at": now, "updated_at": now})
 
 
 def verify_review_token(job_id: str, token: str) -> bool:

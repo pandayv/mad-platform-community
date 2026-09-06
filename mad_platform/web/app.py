@@ -5,30 +5,33 @@ scan-onboarding Cloud Run service. On-demand, manual scans only --
 recurring/event-driven triggers (GitHub webhook, Scheduler) are a
 separate, not-yet-built layer.
 
-A scan takes 30-90s -- too long for one synchronous request -- so
-POST /scan fires the pipeline as a background asyncio task and redirects
-immediately to a status page that polls Firestore (which the pipeline
-already checkpoints to) every couple of seconds. No new agent logic, no
-new datastore -- this is a thin view over what the pipeline already writes.
+A scan takes 30-90s and does real memory-heavy work (Playwright,
+multiple Gemini calls) -- too much to run in-process on the same
+container that's serving everyone else's requests. POST /scan enqueues a
+Cloud Task instead and redirects immediately to a status page that polls
+Firestore (which the pipeline already checkpoints to) every couple of
+seconds. The task is picked up by scan-worker (mad_platform/web/
+worker_app.py), a separate Cloud Run service sized and scaled for that
+workload specifically -- this service never touches Playwright itself
+anymore, which is what keeps it cheap to run at high concurrency.
 
 Run locally: .venv/bin/uvicorn mad_platform.web.app:app --reload --port 8080
 """
 
 from __future__ import annotations
 
-import asyncio
 import html
+import json
 import logging
 import os
 
 from fastapi import FastAPI, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
+from google.cloud import tasks_v2
 
 from mad_platform.agents.action_agent import resolve_escalation as resolve_finding_escalation
-from mad_platform.agents.orchestrator import run_one_time_scan
 from mad_platform.agents.pattern_miner import resolve_pattern_escalation
-from mad_platform.agents.reporter import compute_score, score_color
 from mad_platform.agents.wcag_auto_heal import resolve_kb_escalation
 from mad_platform.state import firestore_client as fs
 from mad_platform.state import storage_client
@@ -58,11 +61,54 @@ app.mount("/static", StaticFiles(directory=os.path.join(os.path.dirname(__file__
 def _issue_sink() -> CsvIssueSink:
     """Community fork default: no ticket-tracker credentials needed from
     anyone. Every scan gets its own CsvIssueSink instance so its rows (and
-    therefore its exported CSV) stay scoped to that one scan -- see
-    _run_and_store, which holds onto this instance to call .export() once
-    the scan finishes.
+    therefore its exported CSV) stay scoped to that one scan -- used here
+    for the (lightweight) escalation-resolve routes below; the scan
+    pipeline itself runs on scan-worker now, which creates its own.
     """
     return CsvIssueSink()
+
+
+# ---- Cloud Tasks: /scan enqueues here instead of running the pipeline
+# in-process. All three fail fast at import time on purpose, same
+# reasoning as MAD_APP_BASE_URL elsewhere -- a fork that forgot to
+# configure the queue should not silently accept scan submissions it can
+# never actually run.
+_SCAN_WORKER_URL = os.environ["SCAN_WORKER_URL"]
+_SCAN_QUEUE_INVOKER_SA = os.environ["SCAN_QUEUE_INVOKER_SA"]
+_TASKS_CLIENT = tasks_v2.CloudTasksClient()
+_QUEUE_PATH = _TASKS_CLIENT.queue_path(
+    os.environ["GOOGLE_CLOUD_PROJECT"],
+    os.environ.get("SCAN_QUEUE_LOCATION", "us-central1"),
+    os.environ.get("SCAN_QUEUE_NAME", "scan-queue"),
+)
+
+
+def _enqueue_scan(job_id: str) -> None:
+    """job_id doubles as the Cloud Tasks task name: a second enqueue for
+    the same job_id (a double form-submit, a retried request) is rejected
+    by Cloud Tasks as a duplicate rather than starting the same scan
+    twice, no separate idempotency bookkeeping needed here.
+    """
+    task = {
+        "name": _TASKS_CLIENT.task_path(
+            os.environ["GOOGLE_CLOUD_PROJECT"],
+            os.environ.get("SCAN_QUEUE_LOCATION", "us-central1"),
+            os.environ.get("SCAN_QUEUE_NAME", "scan-queue"),
+            job_id,
+        ),
+        "http_request": {
+            "http_method": tasks_v2.HttpMethod.POST,
+            "url": f"{_SCAN_WORKER_URL}/run",
+            "headers": {"Content-Type": "application/json"},
+            "body": json.dumps({"job_id": job_id}).encode(),
+            "oidc_token": {
+                "service_account_email": _SCAN_QUEUE_INVOKER_SA,
+                "audience": _SCAN_WORKER_URL,
+            },
+        },
+    }
+    _TASKS_CLIENT.create_task(parent=_QUEUE_PATH, task=task)
+
 
 # scan-onboarding is deployed with --allow-unauthenticated -- a business
 # owner has to be able to just hit the URL. That means the app itself is
@@ -422,7 +468,7 @@ __FONT_LINK__
 <body>
 <div class="page">
   <div class="brand"><a href="/" style="color:inherit;text-decoration:none"><span class="dot-b"></span>MAD Platform</a></div>
-  <h1 id="heading">Scanning __URL__</h1>
+  <h1 id="heading">__URL__</h1>
   <div class="tagline" id="tagline">This runs the real pipeline: page selection, parallel analysis, independent verification, ranking, ticket filing.</div>
   <div class="error-box" id="slow-warning" style="display:none;margin-bottom:16px">
     This is taking longer than usual (3+ minutes). Most scans finish in under 90s -- the
@@ -528,8 +574,19 @@ function stageDot(stage) {
   return `<span class="stg-dot" style="background:${color}"></span>`;
 }
 
+function renderQueued(data) {
+  document.getElementById("heading").textContent = "Queued: " + data.url;
+  document.getElementById("tagline").textContent =
+    "Waiting for a scan slot to free up -- this happens automatically, usually within a couple of minutes.";
+  document.getElementById("content").innerHTML =
+    `<div style="display:flex;align-items:center;gap:10px"><span class="spinner"></span> In queue...</div>` +
+    `<div class="tagline" style="margin:12px 0 0">No need to keep this tab open -- we'll email your full ` +
+    `report to the address you submitted as soon as it's ready. This same link will always show the ` +
+    `current status, so it's safe to close this and check back later.</div>`;
+}
+
 function renderInProgress(data) {
-  if (!startTimeMs && data.created_at) startTimeMs = new Date(data.created_at).getTime();
+  if (!startTimeMs && (data.started_at || data.created_at)) startTimeMs = new Date(data.started_at || data.created_at).getTime();
   document.getElementById("heading").textContent = "Scanning " + data.url;
   const phaseLabel = PHASE_LABELS[data.phase] || "Starting...";
   let rows = Object.entries(data.pages).map(([url, info]) => {
@@ -584,6 +641,7 @@ async function poll() {
   const data = await res.json();
   if (data.status === "completed") { renderCompleted(data); return; }
   if (data.status === "failed") { renderFailed(data); return; }
+  if (data.status === "queued") { renderQueued(data); setTimeout(poll, 3000); return; }
   renderInProgress(data);
   setTimeout(poll, 2000);
 }
@@ -592,40 +650,6 @@ poll();
 </body>
 </html>
 """
-
-
-async def _run_and_store(job_id: str, url: str) -> None:
-    sink = _issue_sink()
-    try:
-        result = await run_one_time_scan(url, job_id=job_id, issue_sink=sink)
-    except Exception:
-        logger.exception("Scan failed for job %s (%s)", job_id, url)
-        return  # run_one_time_scan already wrote status=failed to Firestore before re-raising
-
-    all_ranked = [f for _, f, _ in result.filed + result.escalated + result.already_filed]
-    counts = {"critical": 0, "high": 0, "medium": 0, "low": 0}
-    for r in all_ranked:
-        counts[r.severity.lower()] = counts.get(r.severity.lower(), 0) + 1
-    score = compute_score(all_ranked)
-
-    fs.save_scan_summary(
-        job_id,
-        {
-            "score": score,
-            "score_color": score_color(score),
-            "severity_counts": counts,
-            "principle_counts": theme.principle_counts([r.wcag_criterion for r in all_ranked]),
-            "total_findings": len(all_ranked),
-            "filed_count": len(result.filed) + len(result.already_filed),
-            "escalated_count": len(result.escalated),
-            "report_uri": result.report_uri,
-            # CSV rows only exist in-memory on this one sink instance during
-            # this one scan -- exported and persisted here (Firestore, not a
-            # new storage_client path) so the download route below can serve
-            # it long after this background task has finished.
-            "csv_export": sink.export(),
-        },
-    )
 
 
 def _static_page(title: str, body_html: str, active: str = "") -> str:
@@ -812,8 +836,8 @@ async def start_scan(request: Request, url: str = Form(...), email: str = Form(.
     allowed, reason = fs.check_and_reserve_scan_quota(email, client_ip)
     if not allowed:
         return HTMLResponse(_render_form(error=reason), status_code=429)
-    job_id = fs.create_job(url, owner_contact=email)
-    asyncio.create_task(_run_and_store(job_id, url))
+    job_id = fs.create_job(url, owner_contact=email, status="queued")
+    _enqueue_scan(job_id)
     return RedirectResponse(f"/status/{job_id}", status_code=303)
 
 
@@ -836,6 +860,7 @@ async def api_status(job_id: str) -> JSONResponse:
     if job is None:
         raise HTTPException(404, "No such job")
     created_at = job.get("created_at")
+    started_at = job.get("started_at")
     return JSONResponse(
         {
             "job_id": job_id,
@@ -846,6 +871,7 @@ async def api_status(job_id: str) -> JSONResponse:
             "pages": {url: {"stage": info.get("stage")} for url, info in job.get("pages", {}).items()},
             "summary": job.get("summary"),
             "created_at": created_at.isoformat() if created_at else None,
+            "started_at": started_at.isoformat() if started_at else None,
         }
     )
 

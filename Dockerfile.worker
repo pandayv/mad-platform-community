@@ -1,0 +1,18 @@
+# The one image that still needs Playwright/Chromium -- scan-onboarding
+# no longer touches either now that scan submission just enqueues a Cloud
+# Task instead of running the pipeline in-process. Same base pattern as
+# the original combined Dockerfile, just pointed at worker_app instead.
+FROM python:3.13-slim
+
+WORKDIR /app
+
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt \
+    && python -m playwright install --with-deps chromium
+
+COPY mad_platform ./mad_platform
+
+ENV PORT=8080
+EXPOSE 8080
+
+CMD ["sh", "-c", "uvicorn mad_platform.web.worker_app:app --host 0.0.0.0 --port ${PORT}"]
