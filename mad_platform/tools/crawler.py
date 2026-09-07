@@ -7,20 +7,11 @@ judgment happens here.
 from __future__ import annotations
 
 import asyncio
-import ipaddress
-import socket
 from dataclasses import dataclass
 
 from playwright.async_api import async_playwright
 
-
-class UnsafeTargetError(Exception):
-    """Raised when a URL resolves to a private/link-local/metadata address.
-
-    SSRF guard — the crawler accepts an arbitrary user-supplied URL, so it
-    must refuse to fetch internal infrastructure regardless of what the
-    caller intended.
-    """
+from mad_platform.tools.url_safety import UnsafeTargetError, assert_safe_target
 
 
 class FetchError(Exception):
@@ -105,34 +96,6 @@ _MARK_HIDDEN_JS = """
 """
 
 
-def _assert_safe_target(url: str) -> None:
-    from urllib.parse import urlparse
-
-    hostname = urlparse(url).hostname
-    if not hostname:
-        raise UnsafeTargetError(f"Could not parse a hostname from {url!r}")
-
-    try:
-        resolved = socket.getaddrinfo(hostname, None)
-    except socket.gaierror as exc:
-        raise UnsafeTargetError(f"Could not resolve {hostname!r}: {exc}") from exc
-
-    for family, _, _, _, sockaddr in resolved:
-        ip = ipaddress.ip_address(sockaddr[0])
-        if (
-            ip.is_private
-            or ip.is_loopback
-            or ip.is_link_local
-            or ip.is_reserved
-            or ip.is_multicast
-            or str(ip) == "169.254.169.254"  # cloud metadata endpoint, explicit belt-and-suspenders
-        ):
-            raise UnsafeTargetError(
-                f"{hostname!r} resolves to {ip}, which is a private/link-local/"
-                f"metadata address — refusing to fetch it."
-            )
-
-
 async def fetch_page(url: str, timeout_ms: int = 15000, retries: int = 2) -> PageSnapshot:
     """Render a page with a real browser and capture its HTML + a full-page screenshot.
 
@@ -140,7 +103,7 @@ async def fetch_page(url: str, timeout_ms: int = 15000, retries: int = 2) -> Pag
     backoff — a single flaky load must not fail the whole page, let alone
     the whole cycle.
     """
-    _assert_safe_target(url)
+    assert_safe_target(url)
 
     last_error: Exception | None = None
     for attempt in range(1, retries + 2):

@@ -24,7 +24,9 @@ import html
 import json
 import logging
 import os
+import time
 
+import httpx
 from fastapi import FastAPI, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
@@ -35,7 +37,9 @@ from mad_platform.agents.pattern_miner import resolve_pattern_escalation
 from mad_platform.agents.wcag_auto_heal import resolve_kb_escalation
 from mad_platform.state import firestore_client as fs
 from mad_platform.state import storage_client
+from mad_platform.tools import abuse_guard
 from mad_platform.tools.issue_sink import CsvIssueSink
+from mad_platform.tools.url_safety import UnsafeTargetError, assert_safe_target
 from mad_platform.web import theme
 
 # Not logging.basicConfig(): uvicorn configures its own logging on startup,
@@ -113,18 +117,40 @@ def _enqueue_scan(job_id: str) -> None:
 # scan-onboarding is deployed with --allow-unauthenticated -- a business
 # owner has to be able to just hit the URL. That means the app itself is
 # the only thing standing between this endpoint and someone using it as a
-# free Gemini-calling, Playwright-fetching open relay. If MAD_ACCESS_CODE
-# is set (Cloud Run deploys it from Secret Manager), a scan requires it;
-# if unset (local dev), the gate is open.
-_ACCESS_CODE = os.environ.get("MAD_ACCESS_CODE")
+# free Gemini-calling, Playwright-fetching open relay. Layered defenses,
+# cheapest first: a honeypot field + minimum-fill-time check (below, no
+# signup needed), then abuse_guard's email/domain checks, then
+# firestore_client's per-email/per-IP/monthly quota. Cloudflare Turnstile
+# is the next layer up -- same opt-in-via-env-var pattern as MAD_REVIEW_CODE
+# below: if TURNSTILE_SECRET_KEY is unset (no site registered yet), the
+# gate is simply open, so this is safe to leave wired in ahead of actually
+# signing up for a site key.
+_TURNSTILE_SITE_KEY = os.environ.get("TURNSTILE_SITE_KEY")
+_TURNSTILE_SECRET_KEY = os.environ.get("TURNSTILE_SECRET_KEY")
+
+
+async def _turnstile_passed(token: str) -> bool:
+    if not _TURNSTILE_SECRET_KEY:
+        return True
+    if not token:
+        return False
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            resp = await client.post(
+                "https://challenges.cloudflare.com/turnstile/v0/siteverify",
+                data={"secret": _TURNSTILE_SECRET_KEY, "response": token},
+            )
+        return bool(resp.json().get("success"))
+    except httpx.HTTPError:
+        # Cloudflare being unreachable shouldn't take the whole scan form
+        # down -- fail open here, same as an unset secret key.
+        return True
 
 # The SME review queue is a separate trust boundary from the public scan
 # form -- REQUIREMENTS §5.6 is explicit that it "must not be exposed to
-# the customer/business owner". Deliberately a different code from
-# MAD_ACCESS_CODE, not the same one reused, so having one doesn't imply
-# having the other. The session cookie just holds the code itself rather
-# than an issued token -- a reasonable simplification for this scope, not
-# a production-grade session mechanism.
+# the customer/business owner". The session cookie just holds the code
+# itself rather than an issued token -- a reasonable simplification for
+# this scope, not a production-grade session mechanism.
 _REVIEW_CODE = os.environ.get("MAD_REVIEW_CODE")
 _REVIEW_COOKIE = "mad_review_session"
 
@@ -173,13 +199,13 @@ def _site_footer() -> str:
 
 
 def _render_form(error: str | None = None) -> str:
-    code_field = (
-        '<label class="f-label sr-only" for="code">Access code</label>'
-        '<input id="code" type="password" name="code" placeholder="Access code" required autocomplete="off">'
-        if _ACCESS_CODE
+    error_html = f'<div class="error-box">{html.escape(error)}</div>' if error else ""
+    turnstile_script = (
+        '<script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>'
+        if _TURNSTILE_SITE_KEY
         else ""
     )
-    error_html = f'<div class="error-box">{html.escape(error)}</div>' if error else ""
+    turnstile_widget = f'<div class="cf-turnstile" data-sitekey="{_TURNSTILE_SITE_KEY}"></div>' if _TURNSTILE_SITE_KEY else ""
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -188,6 +214,7 @@ def _render_form(error: str | None = None) -> str:
 <title>MAD Platform | Free accessibility scans for small business websites</title>
 <meta name="description" content="A free, self-serve tool that scans your website for accessibility issues, verifies what it finds, and gives you real, actionable fixes, not just a report.">
 {theme.FONT_LINK}
+{turnstile_script}
 <style>{_BASE_STYLE}</style>
 </head>
 <body>
@@ -215,7 +242,9 @@ def _render_form(error: str | None = None) -> str:
           <span class="tip-text" id="email-tip" role="tooltip">We'll send your full report here, and use it to keep this free tool honest about whether it's actually helping. Never shared, never sold.</span>
         </span>
       </div>
-      {code_field}
+      <input type="text" name="website" tabindex="-1" autocomplete="off" aria-hidden="true" style="position:absolute;left:-9999px;width:1px;height:1px;opacity:0">
+      <input type="hidden" name="form_ts" value="{int(time.time())}">
+      {turnstile_widget}
       <button type="submit" class="scan-submit">Scan my site &rarr;</button>
     </form>
     {error_html}
@@ -338,11 +367,6 @@ def _render_form(error: str | None = None) -> str:
     </table>
   </div>
   <p class="compare-footnote"><sup>1</sup> Confirmed: one well-known checker's free tier is explicitly single-page-only. <sup>2</sup> Human review exists, but as a separate consulting-style manual audit, not built into the automated scan. <sup>3</sup> The FTC fined a major overlay-widget vendor $1M in 2025 for overstating what its "auto-fix" can actually do.</p>
-  <div class="compare-example">
-    <p class="compare-label">Independent verification, in practice</p>
-    <div class="compare-stat">131 of 136</div>
-    <p>A well-known free checker recently reported 136 failed accessibility checks on Wikipedia. 131 of them &mdash; 96% of everything it flagged &mdash; came from a single contrast-checking rule. A near-total failure rate on one of the internet's most-viewed, professionally maintained sites isn't a real reflection of the site &mdash; it's a scanner getting the math wrong, at scale, unreviewed. That's exactly what an independent verification pass exists to catch.</p>
-  </div>
 </section>
 
 {_site_footer()}
@@ -685,40 +709,49 @@ async def terms_page() -> str:
         """
         <div class="trust-section-label">Read these three first</div>
         <ol class="trust-list">
-          <li><h3>This is not legal advice</h3>
+          <li><h3>This is not legal advice, and it never will be</h3>
             <p>MAD Platform is an automated scanning tool. It looks for patterns that commonly
-            indicate WCAG accessibility issues and estimates their real-world risk, it does not
+            indicate WCAG accessibility issues and estimates their real-world risk. It does not
             perform a legal review, does not guarantee compliance with any law or standard, and
-            a clean scan is not a guarantee you are free of legal exposure. If accessibility
-            compliance matters to your business in a way that carries real legal or financial
-            risk, talk to a qualified attorney.</p></li>
+            a clean scan is not proof you're free of legal exposure. Think of it as a smoke
+            detector, not a fire inspector: it's built to catch what it can catch, reliably and
+            for free, not to certify anything. If accessibility compliance carries real legal or
+            financial stakes for your business, that's exactly the point where you bring in a
+            qualified attorney, not this tool.</p></li>
 
-          <li><h3>Who operates this</h3>
-            <p>An independent, open-source project, not a registered company. There's no
-            corporate entity standing behind these terms, only the person running it and the
-            public code doing the work: <a href="https://github.com/pandayv/mad-platform-community" target="_blank" rel="noopener">github.com/pandayv/mad-platform-community</a>.
-            That's also where to raise an issue or a question about how this operates.</p></li>
+          <li><h3>Who operates this, and who doesn't</h3>
+            <p>An independent, open-source project, run by one person, not a company. There is
+            no corporate entity, no support team, and no legal department behind these terms,
+            only the person running it and the public code doing the work:
+            <a href="https://github.com/pandayv/mad-platform-community" target="_blank" rel="noopener">github.com/pandayv/mad-platform-community</a>.
+            That's also where to raise an issue or ask a question about how this operates.
+            Nothing here is, or should be read as, the output of a company with legal counsel on
+            staff.</p></li>
 
-          <li><h3>Limitation of liability</h3>
-            <p>To the fullest extent permitted by law, the operator of this tool is not liable
-            for any damages, direct or indirect, arising from your use of it or reliance on its
-            results, including but not limited to lost business, legal costs, or any lawsuit or
-            claim related to web accessibility.</p></li>
+          <li><h3>You use this at your own risk</h3>
+            <p>This tool is provided free, "as is" and "as available," with no warranty of any
+            kind. To the fullest extent permitted by law, the operator isn't liable for any
+            damages, direct or indirect, arising from your use of it or reliance on its results —
+            including lost business, legal costs, or any claim related to web accessibility. By
+            using this tool, you agree that any decision you make based on its output is yours
+            alone, and you won't hold the operator responsible for that decision.</p></li>
         </ol>
 
         <div class="trust-section-label">The rest, for completeness</div>
         <ol class="trust-list" style="counter-reset: trust-item 3">
-          <li><h3>No warranty</h3>
-            <p>This tool is provided free of charge, as-is, with no warranty of any kind,
-            express or implied, including accuracy, completeness, or fitness for a particular
-            purpose. Automated scans can miss real issues and can flag things that aren't real
-            issues.</p></li>
+          <li><h3>No warranty, no guaranteed uptime</h3>
+            <p>Provided as-is, with no warranty of any kind, express or implied, including
+            accuracy, completeness, or fitness for a particular purpose. Automated scans can miss
+            real issues and can flag things that aren't real issues. This is a self-funded,
+            one-person project with no SLA — it may be slow, may be temporarily unavailable, or
+            may change or shut down without notice. Free tools built and run by one person come
+            with that tradeoff; it's the honest deal being offered here.</p></li>
 
           <li><h3>Fair use</h3>
             <p>This is a free, self-serve, rate-limited tool intended for scanning websites you
-            own or are authorized to scan. Automated abuse, attempts to bypass the rate limits,
-            or use of the scan endpoint for anything other than its intended purpose is not
-            permitted.</p></li>
+            own or are authorized to scan. Automated abuse, attempts to bypass the rate limits or
+            anti-abuse checks, or use of the scan endpoint for anything other than its intended
+            purpose is not permitted, and may get your access blocked without warning.</p></li>
 
           <li><h3>Changes</h3>
             <p>These terms may be updated as the tool evolves. Continued use after a change
@@ -734,28 +767,37 @@ async def privacy_page() -> str:
     return _static_page(
         "Privacy Policy",
         """
+        <p>Short version: we collect the minimum needed to run your scan and get you the
+        report, we never sell it, and you can ask to have it deleted whenever you want. The
+        long version is below, but that's the whole policy in one sentence.</p>
+
         <p><strong>What we collect:</strong> the website URL you submit, the email address you
         provide, the scan results (findings, severity, suggested fixes), and, if you choose to
         leave one, your feedback on whether the report was helpful.</p>
 
-        <p><strong>Why we collect it:</strong> the email is how your report is delivered and
-        how the per-scan review link is scoped to you specifically, and it's also the only way
-        we have of finding out whether this free tool is actually helping real businesses.
-        The IP address of each request is used briefly for rate limiting (to keep this free
-        tool usable for everyone), not stored long-term or linked to your identity beyond
-        that.</p>
+        <p><strong>Why we collect it:</strong> the email is how your report is delivered and how
+        the per-scan review link is scoped to you specifically, so no one else who uses this
+        tool can see your findings. It's also the only way we have of finding out whether this
+        free tool is actually helping real businesses. The IP address of each request is used
+        briefly for rate limiting and basic anti-abuse checks — the same reason any free public
+        tool has to, to keep it usable and not overwhelmed — not stored long-term or linked to
+        your identity beyond that. We also run a few invisible, automated checks (like confirming
+        a submission wasn't a script) before a scan is queued, purely to keep this free tool
+        working for real people instead of bots; these checks don't collect anything beyond
+        what's already listed here.</p>
 
-        <p><strong>Where it lives:</strong> on Google Cloud infrastructure (Firestore and
-        Cloud Storage), in a project separate from any other project the operator runs.</p>
+        <p><strong>Where it lives:</strong> on Google Cloud infrastructure (Firestore and Cloud
+        Storage), in a project separate from any other project the operator runs.</p>
 
-        <p><strong>What we don't do:</strong> we don't sell your data, and we don't share it
-        with anyone outside of what's needed to run the scan itself (Google Cloud's AI models,
-        used to analyze your site's public-facing pages).</p>
+        <p><strong>What we don't do:</strong> we don't sell your data, we don't use it for
+        advertising, and we don't share it with anyone outside of what's strictly needed to run
+        the scan itself (Google Cloud's AI models, used to analyze your site's public-facing
+        pages).</p>
 
         <p><strong>Your control:</strong> to request deletion of your scan history or email
-        address, contact the operator directly (see the FAQ for how). Feedback marked "okay to
-        use as a public testimonial" may be shared publicly; anything not marked that way
-        stays private.</p>
+        address, contact the operator directly (see the FAQ for how) — no form to fill out, no
+        waiting period, just ask. Feedback marked "okay to use as a public testimonial" may be
+        shared publicly; anything not marked that way stays private, full stop.</p>
         """,
         active="/privacy",
     )
@@ -769,52 +811,66 @@ async def faq_page() -> str:
         <div class="trust-section-label">Before you trust us with your URL</div>
         <ol class="trust-list">
           <li><h3>Is this actually free? What's the catch?</h3>
-            <p>No catch. It's a self-funded community project, not a lead-generation funnel.
-            There's an optional way to chip in once the donation option is live, but the
-            scanner itself never requires it and never will.</p></li>
+            <p>No catch, and there isn't a paid tier waiting behind a paywall. This is a
+            self-funded community project, not a lead-generation funnel in disguise — nobody's
+            selling your contact info to an accessibility consultant after you scan. If you find
+            it genuinely useful, there's an optional way to chip in once the donation option is
+            live, but the scanner itself never requires it and never will.</p></li>
 
           <li><h3>Why do you need my email?</h3>
-            <p>Three reasons, no others: to send you the report, to create your private review
-            link so only you (not anyone else who uses this tool) can see your own findings,
-            and as a basic safeguard against the free tool being abused. Full detail in the
-            <a href="/privacy">privacy policy</a>.</p></li>
+            <p>Exactly three reasons, no others: to send you the full report, to create your
+            private review link so only you — not anyone else who uses this tool — can see your
+            own findings, and as a basic safeguard against the free tool being abused by bots.
+            That's the entire list. Full detail in the <a href="/privacy">privacy policy</a>.</p></li>
 
           <li><h3>Who's actually behind this?</h3>
-            <p>A solo, open-source project, not a company. The code that runs this exact site
-            is public: <a href="https://github.com/pandayv/mad-platform-community" target="_blank" rel="noopener">github.com/pandayv/mad-platform-community</a>.
-            You can read exactly what it does with your URL and your email before you ever
-            submit either.</p></li>
+            <p>One person, building this in the open, not a company. The code that runs this
+            exact site is public: <a href="https://github.com/pandayv/mad-platform-community" target="_blank" rel="noopener">github.com/pandayv/mad-platform-community</a>.
+            That's not a marketing claim — you can read exactly what it does with your URL and
+            your email before you ever submit either, line by line.</p></li>
         </ol>
 
         <div class="trust-section-label">What it does and doesn't do</div>
         <ol class="trust-list" style="counter-reset: trust-item 3">
           <li><h3>Why is it called MAD Platform?</h3>
             <p>MAD is short for Multi-Agent Defense Platform. Multi-agent because it's genuinely
-            a team of specialized AI agents working together, one decides what to check, one
-            finds issues, one independently verifies them, one takes action, not a single model
-            doing everything at once. Defense because that's the actual job: catching gaps
-            before they become a legal problem, not just reporting on them after the fact.</p></li>
+            a team of specialized AI agents working together — one decides what to check, one
+            finds issues, one independently verifies them, one takes action — not a single model
+            skimming your site once and guessing. Defense because that's the actual job:
+            catching gaps before they become a legal problem, not just reporting on them after
+            the fact.</p></li>
 
-          <li><h3>What is WCAG?</h3>
-            <p>The Web Content Accessibility Guidelines, the standard most digital
-            accessibility laws and lawsuits point back to. This tool checks your site against
-            it.</p></li>
+          <li><h3>What is WCAG, and why should I care?</h3>
+            <p>The Web Content Accessibility Guidelines — the standard nearly every digital
+            accessibility law and lawsuit points back to. If your site doesn't meet it, that's
+            the gap that shows up in a demand letter. This tool checks your site against it, so
+            you find out from a scan instead.</p></li>
 
           <li><h3>What does this tool actually do?</h3>
             <p>It scans the pages on your site that carry the most real risk, checks them with
             both rule-based and AI-assisted review, independently verifies every finding before
-            showing it to you, and gives you a concrete fix for each confirmed issue, plus a
-            downloadable, tracker-importable list.</p></li>
+            it's ever shown to you, and gives you a concrete fix for each confirmed issue — plus
+            a downloadable, tracker-importable list you can hand straight to whoever fixes your
+            site.</p></li>
 
           <li><h3>What doesn't it do?</h3>
             <p>It doesn't replace a real accessibility audit or legal review, doesn't check
-            every possible WCAG criterion, and doesn't fix your site for you, it tells you what
-            to fix and how.</p></li>
+            every possible WCAG criterion, and doesn't fix your site for you — it tells you what
+            to fix and how. Being upfront about that boundary is the whole reason the verification
+            step exists: a tool that only ever tells you what you want to hear isn't actually
+            protecting you.</p></li>
+
+          <li><h3>Can I really trust an automated tool with something this important?</h3>
+            <p>Trust the verification, not blind faith in AI. Every finding this tool shows you
+            has already been independently checked by a second pass before it reaches your
+            report — that's the entire reason it's multi-agent instead of one model guessing
+            once. It still isn't a lawyer, and it says so, repeatedly, on purpose.</p></li>
 
           <li><h3>I need real legal help, not just a scan.</h3>
-            <p>This tool can tell you what's wrong technically; it can't tell you what your
-            specific legal exposure is. Talk to a qualified accessibility or ADA attorney for
-            that.</p></li>
+            <p>Fair, and this tool will tell you the same thing: it can tell you what's wrong
+            technically; it can't tell you what your specific legal exposure is. Talk to a
+            qualified accessibility or ADA attorney for that — this scan is a useful first step
+            toward that conversation, not a substitute for it.</p></li>
         </ol>
         """,
         active="/faq",
@@ -822,12 +878,45 @@ async def faq_page() -> str:
 
 
 @app.post("/scan")
-async def start_scan(request: Request, url: str = Form(...), email: str = Form(...), code: str = Form("")) -> Response:
-    if _ACCESS_CODE and code != _ACCESS_CODE:
-        return HTMLResponse(_render_form(error="Wrong access code."), status_code=403)
+async def start_scan(
+    request: Request,
+    url: str = Form(...),
+    email: str = Form(...),
+    website: str = Form(""),
+    form_ts: str = Form(""),
+    turnstile_token: str = Form("", alias="cf-turnstile-response"),
+) -> Response:
+    # Honeypot: real visitors never see or fill this field (off-screen,
+    # aria-hidden, tabindex=-1). A non-empty value means a bot filled every
+    # field it could find. Same generic-looking rejection as a real
+    # validation failure -- no need to tip off a scraper that it tripped a
+    # trap specifically.
+    if website.strip():
+        return HTMLResponse(_render_form(error="Something went wrong. Please try again."), status_code=400)
+
+    # A human takes measurably longer than this to load the page, read two
+    # fields, and click submit -- catches scripted submissions that skip
+    # rendering entirely.
+    try:
+        if time.time() - float(form_ts) < abuse_guard.MIN_FORM_FILL_SECONDS:
+            return HTMLResponse(_render_form(error="Something went wrong. Please try again."), status_code=400)
+    except ValueError:
+        return HTMLResponse(_render_form(error="Something went wrong. Please try again."), status_code=400)
+
+    if not await _turnstile_passed(turnstile_token):
+        return HTMLResponse(_render_form(error="Please complete the verification and try again."), status_code=400)
+
     email = email.strip()
-    if "@" not in email or "." not in email.split("@")[-1]:
-        return HTMLResponse(_render_form(error="Please enter a valid email address."), status_code=400)
+    email_ok, email_reason = abuse_guard.email_looks_valid(email)
+    if not email_ok:
+        return HTMLResponse(_render_form(error=email_reason), status_code=400)
+
+    url = url.strip()
+    try:
+        assert_safe_target(url)
+    except UnsafeTargetError:
+        return HTMLResponse(_render_form(error="Please enter a public website URL we can actually reach."), status_code=400)
+
     # request.client.host is the direct connection IP -- if this ever sits
     # behind a proxy/load balancer that isn't Cloud Run's own (which already
     # gives the real client IP here), an X-Forwarded-For read would be
