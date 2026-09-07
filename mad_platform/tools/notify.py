@@ -21,6 +21,7 @@ and swallowed, never raised.
 
 from __future__ import annotations
 
+import html
 import logging
 import os
 
@@ -96,9 +97,15 @@ def send_report_email(
         logger.info("RESEND_API_KEY not set, skipping report email")
         return
 
+    # url and review_lines both trace back to the site being scanned (the
+    # submitted URL and page URLs discovered while crawling it) -- an
+    # attacker's own site, so its content is untrusted the same way a
+    # scanned page's HTML is. review_url is server-generated (job_id +
+    # review_token), never derived from the scanned site, so it's safe to
+    # drop into an href unescaped.
     review_block = ""
     if review_lines:
-        items = "".join(f"<li>{line}</li>" for line in review_lines)
+        items = "".join(f"<li>{html.escape(line)}</li>" for line in review_lines)
         action = (
             f"<p><a href='{review_url}' style='font-weight:600'>Review these now &rarr;</a></p>"
             if review_url
@@ -112,7 +119,7 @@ def send_report_email(
             "</div>"
         )
 
-    body_html = f"<p>Your accessibility scan of {url} is complete.</p>{review_block}{report_html}"
+    body_html = f"<p>Your accessibility scan of {html.escape(url)} is complete.</p>{review_block}{report_html}"
 
     try:
         resp = requests.post(
