@@ -20,6 +20,7 @@ Run locally: .venv/bin/uvicorn mad_platform.web.app:app --reload --port 8080
 
 from __future__ import annotations
 
+import asyncio
 import html
 import json
 import logging
@@ -60,6 +61,26 @@ logger = logging.getLogger("mad_platform.web")
 
 app = FastAPI(title="MAD Platform")
 app.mount("/static", StaticFiles(directory=os.path.join(os.path.dirname(__file__), "static")), name="static")
+
+
+@app.middleware("http")
+async def _security_headers(request: Request, call_next):
+    """Baseline hardening with no functional cost -- none of these change
+    behavior for a legitimate request, they only remove attack surface
+    (clickjacking via iframe embedding, MIME-sniffing a served file as
+    something it isn't, a browser silently downgrading to http on a stale
+    bookmark/link). Deliberately not attempting a Content-Security-Policy
+    here -- every page on this app relies on inline <script>/<style>
+    (no nonce infrastructure exists), so a CSP strict enough to mean
+    anything would break the pages it's meant to protect. Worth doing
+    properly later, not as a quick add-on.
+    """
+    response = await call_next(request)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+    return response
 
 
 def _issue_sink() -> CsvIssueSink:
@@ -906,16 +927,34 @@ async def start_scan(
     if not await _turnstile_passed(turnstile_token):
         return HTMLResponse(_render_form(error="Please complete the verification and try again."), status_code=400)
 
+    # Both checks below do a real DNS lookup, which can block for the full
+    # OS resolver timeout against a domain whose nameserver simply never
+    # answers -- an attacker-controlled domain used as the email or URL is
+    # an easy way to trigger that. This app runs a single event loop with
+    # no --workers, so a lookup that blocks the loop directly stalls every
+    # other concurrent request on this instance, not just this one -- a
+    # self-inflicted DoS from the abuse checks themselves. asyncio.to_thread
+    # moves the blocking call off the event loop; wait_for bounds how long
+    # this one request (and the thread it's running in) waits before giving
+    # up, so a hostile domain costs a few seconds of one thread, not an
+    # unbounded hang.
     email = email.strip()
-    email_ok, email_reason = abuse_guard.email_looks_valid(email)
+    try:
+        email_ok, email_reason = await asyncio.wait_for(
+            asyncio.to_thread(abuse_guard.email_looks_valid, email), timeout=3.0
+        )
+    except asyncio.TimeoutError:
+        return HTMLResponse(_render_form(error="We couldn't verify that email domain in time. Please double-check it and try again."), status_code=400)
     if not email_ok:
         return HTMLResponse(_render_form(error=email_reason), status_code=400)
 
     url = url.strip()
     try:
-        assert_safe_target(url)
+        await asyncio.wait_for(asyncio.to_thread(assert_safe_target, url), timeout=3.0)
     except UnsafeTargetError:
         return HTMLResponse(_render_form(error="Please enter a public website URL we can actually reach."), status_code=400)
+    except asyncio.TimeoutError:
+        return HTMLResponse(_render_form(error="We couldn't verify that URL in time. Please double-check it and try again."), status_code=400)
 
     # request.client.host is the direct connection IP -- if this ever sits
     # behind a proxy/load balancer that isn't Cloud Run's own (which already
@@ -1197,11 +1236,19 @@ async def review_list(request: Request) -> Response:
 
 
 @app.post("/review/login")
-async def review_login(code: str = Form(...)) -> Response:
+async def review_login(request: Request, code: str = Form(...)) -> Response:
     if _REVIEW_CODE and code != _REVIEW_CODE:
         return HTMLResponse(_render_review_login(error="Wrong review code."), status_code=403)
     resp = RedirectResponse("/review", status_code=303)
-    resp.set_cookie(_REVIEW_COOKIE, _REVIEW_CODE or "", httponly=True, samesite="lax")
+    # secure=True only over https. Cloud Run terminates TLS at its own edge
+    # and forwards plain http to the container, and uvicorn isn't started
+    # with --proxy-headers, so request.url.scheme itself would always read
+    # "http" here even in production -- checking X-Forwarded-Proto (which
+    # Cloud Run always sets, regardless of that flag) is what actually
+    # distinguishes production from local dev (uvicorn --reload on plain
+    # http, where this header is simply absent).
+    is_https = request.headers.get("x-forwarded-proto") == "https" or request.url.scheme == "https"
+    resp.set_cookie(_REVIEW_COOKIE, _REVIEW_CODE or "", httponly=True, samesite="lax", secure=is_https)
     return resp
 
 

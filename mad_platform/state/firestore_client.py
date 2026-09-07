@@ -15,7 +15,7 @@ from __future__ import annotations
 import os
 import secrets
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from google.cloud import firestore
@@ -328,6 +328,14 @@ def check_and_reserve_scan_quota(email: str, ip: str) -> tuple[bool, str]:
     Returns (allowed, reason). reason is empty when allowed=True, and a
     short human-readable string when False, meant to be shown directly to
     the visitor (e.g. "You've reached today's scan limit for this email").
+
+    Every document written here gets an `expires_at` a little past its own
+    natural relevance window -- daily counters at +2 days, the monthly
+    counter at +35 days -- matched by a Firestore TTL policy on this
+    collection (see DECISIONS_LOG.md). Without that, raw IPs and emails
+    would sit in these documents indefinitely, which is a real mismatch
+    with the privacy policy's "used briefly... not stored long-term" claim,
+    not just a theoretical one.
     """
     now = datetime.now(timezone.utc)
     day_key = now.strftime("%Y-%m-%d")
@@ -339,7 +347,21 @@ def check_and_reserve_scan_quota(email: str, ip: str) -> tuple[bool, str]:
     if month_count >= MAX_SCANS_PER_MONTH:
         return False, "We've hit our free capacity for this month. Please check back next month."
 
-    email_key = f"email_{email.strip().lower()}_{day_key}"
+    # Normalized for the quota key only, never for where the report is
+    # actually sent -- gmail.com/googlemail.com ignore dots and treat
+    # +anything as an alias of the same inbox, so without this,
+    # "me+1@gmail.com", "me+2@gmail.com", ... would each get their own
+    # fresh daily quota from a single real mailbox. Stripping a "+suffix"
+    # for every domain too, since it's a widely (if not universally)
+    # honored convention -- a cheap partial mitigation, not a complete one.
+    quota_email = email.strip().lower()
+    local, _, domain = quota_email.rpartition("@")
+    local = local.split("+", 1)[0]
+    if domain in ("gmail.com", "googlemail.com"):
+        local = local.replace(".", "")
+    quota_email = f"{local}@{domain}"
+
+    email_key = f"email_{quota_email}_{day_key}"
     email_ref = _USAGE.document(email_key)
     email_doc = email_ref.get()
     email_count = email_doc.to_dict().get("count", 0) if email_doc.exists else 0
@@ -356,9 +378,9 @@ def check_and_reserve_scan_quota(email: str, ip: str) -> tuple[bool, str]:
     # All three checks passed -- reserve the quota now, atomically, so a
     # burst of concurrent requests can't all read "under the limit" and
     # all proceed before any of them increments.
-    email_ref.set({"count": firestore.Increment(1), "updated_at": now}, merge=True)
-    ip_ref.set({"count": firestore.Increment(1), "updated_at": now}, merge=True)
-    month_ref.set({"scans": firestore.Increment(1), "updated_at": now}, merge=True)
+    email_ref.set({"count": firestore.Increment(1), "updated_at": now, "expires_at": now + timedelta(days=2)}, merge=True)
+    ip_ref.set({"count": firestore.Increment(1), "updated_at": now, "expires_at": now + timedelta(days=2)}, merge=True)
+    month_ref.set({"scans": firestore.Increment(1), "updated_at": now, "expires_at": now + timedelta(days=35)}, merge=True)
     return True, ""
 
 

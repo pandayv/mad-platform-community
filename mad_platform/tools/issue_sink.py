@@ -79,8 +79,21 @@ class CsvIssueSink(IssueSink):
         writer = csv.DictWriter(buffer, fieldnames=["Summary", "Description"])
         writer.writeheader()
         for row in self.rows:
-            writer.writerow({"Summary": row["Summary"], "Description": row["Description"]})
+            writer.writerow({"Summary": _defuse_formula(row["Summary"]), "Description": _defuse_formula(row["Description"])})
         return buffer.getvalue()
+
+
+def _defuse_formula(value: str) -> str:
+    """Summary/Description ultimately trace back to scanned page content --
+    an attacker's own site, same as anywhere else scanned HTML flows into
+    this app. A cell starting with =, +, -, or @ is executed as a formula
+    by Excel/Sheets on open ("CSV/formula injection") -- a leading
+    apostrophe forces text interpretation without changing what's visibly
+    displayed.
+    """
+    if value and value[0] in ("=", "+", "-", "@"):
+        return "'" + value
+    return value
 
 
 class MockIssueSink(IssueSink):
