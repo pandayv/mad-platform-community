@@ -865,11 +865,11 @@ async def terms_page() -> str:
             qualified attorney, not this tool.</p></li>
 
           <li><h3>Who operates this, and who doesn't</h3>
-            <p>An independent, open-source project, run by one person, not a company. There is
-            no corporate entity, no support team, and no legal department behind these terms,
-            only the person running it and the public code doing the work:
+            <p>An independent, open-source project (AGPL-3.0 licensed), run by one person, not a
+            company. There is no corporate entity, no support team, and no legal department
+            behind these terms, only the person running it and the public code doing the work:
             <a href="https://github.com/pandayv/mad-platform-community" target="_blank" rel="noopener">github.com/pandayv/mad-platform-community</a>.
-            That's also where to raise an issue or ask a question about how this operates —
+            That's also where to raise an issue or ask a question about how this operates,
             or email <a href="mailto:hello@mad-platform.org">hello@mad-platform.org</a> directly.
             Nothing here is, or should be read as, the output of a company with legal counsel on
             staff.</p></li>
@@ -877,7 +877,7 @@ async def terms_page() -> str:
           <li><h3>You use this at your own risk</h3>
             <p>This tool is provided free, "as is" and "as available," with no warranty of any
             kind. To the fullest extent permitted by law, the operator isn't liable for any
-            damages, direct or indirect, arising from your use of it or reliance on its results —
+            damages, direct or indirect, arising from your use of it or reliance on its results,
             including lost business, legal costs, or any claim related to web accessibility. By
             using this tool, you agree that any decision you make based on its output is yours
             alone, and you won't hold the operator responsible for that decision.</p></li>
@@ -885,19 +885,33 @@ async def terms_page() -> str:
 
         <div class="trust-section-label">The rest, for completeness</div>
         <ol class="trust-list" style="counter-reset: trust-item 3">
+          <li><h3>No contract, no obligation</h3>
+            <p>Nothing here creates a binding agreement between you and the operator, and using
+            this tool doesn't obligate either of you to anything beyond what's written on this
+            page. There's no service-level commitment and no ongoing duty to keep this running.
+            There's no negotiation on offer, either: these terms are take-it-or-leave-it. If
+            that doesn't work for you, don't use the tool. If it does, using it means you accept
+            these terms exactly as written.</p></li>
+
           <li><h3>No warranty, no guaranteed uptime</h3>
             <p>Provided as-is, with no warranty of any kind, express or implied, including
             accuracy, completeness, or fitness for a particular purpose. Automated scans can miss
             real issues and can flag things that aren't real issues. This is a self-funded,
-            one-person project with no SLA — it may be slow, may be temporarily unavailable, or
+            one-person project with no SLA: it may be slow, may be temporarily unavailable, or
             may change or shut down without notice. Free tools built and run by one person come
             with that tradeoff; it's the honest deal being offered here.</p></li>
 
           <li><h3>Fair use</h3>
-            <p>This is a free, self-serve, rate-limited tool intended for scanning websites you
-            own or are authorized to scan. Automated abuse, attempts to bypass the rate limits or
-            anti-abuse checks, or use of the scan endpoint for anything other than its intended
-            purpose is not permitted, and may get your access blocked without warning.</p></li>
+            <p>This is a free, self-serve tool intended for scanning websites you own or are
+            authorized to scan. It's rate-limited and gated by a one-time email verification.
+            Attempts to bypass either, automated abuse, or using the scan endpoint for anything
+            other than its intended purpose is not permitted, and may get your access blocked
+            without warning.</p></li>
+
+          <li><h3>Governing law</h3>
+            <p>These terms are governed by the laws of the State of Texas, USA, without regard
+            to its conflict-of-law principles. If any part of these terms turns out to be
+            unenforceable, the rest still stands.</p></li>
 
           <li><h3>Changes</h3>
             <p>These terms may be updated as the tool evolves. Continued use after a change
@@ -918,33 +932,44 @@ async def privacy_page() -> str:
         long version is below, but that's the whole policy in one sentence.</p>
 
         <p><strong>What we collect:</strong> the website URL you submit, the email address you
-        provide, the scan results (findings, severity, suggested fixes), and, if you choose to
-        leave one, your feedback on whether the report was helpful.</p>
+        verify, the scan results (findings, severity, suggested fixes), and, if you choose to
+        leave one, your feedback on whether the report was helpful. When you verify your email,
+        we briefly store a 6-digit code against it, and once verified, a random token (not your
+        email itself) in a cookie on your own browser so you're not asked to re-verify on your
+        next scan.</p>
 
         <p><strong>Why we collect it:</strong> the email is how your report is delivered and how
-        the per-scan review link is scoped to you specifically, so no one else who uses this
-        tool can see your findings. It's also the only way we have of finding out whether this
-        free tool is actually helping real businesses. The IP address of each request is used
-        briefly for rate limiting and basic anti-abuse checks — the same reason any free public
-        tool has to, to keep it usable and not overwhelmed — not stored long-term or linked to
-        your identity beyond that. We also run a few invisible, automated checks (like confirming
-        a submission wasn't a script) before a scan is queued, purely to keep this free tool
-        working for real people instead of bots; these checks don't collect anything beyond
-        what's already listed here.</p>
+        the per-scan review link is scoped to you specifically, so no one else who uses this tool
+        can see your findings. It's also the only way we have of finding out whether this free
+        tool is actually helping real businesses. Confirming it with a one-time code, rather than
+        just taking your word for it, is what keeps this free tool usable for real people instead
+        of bots submitting fake addresses. A couple of quieter, invisible checks run alongside it
+        too (confirming a submission wasn't a script), before a scan is even queued. The IP
+        address of each request is used briefly for rate limiting, the same reason any free
+        public tool has to, to keep it usable and not overwhelmed.</p>
+
+        <p><strong>How long we keep it:</strong> this is enforced automatically by the database
+        itself (a Firestore TTL policy, for anyone checking), not just written here as a promise.
+        Verification codes are gone within about an hour of being issued, whether or not you used
+        them. Rate-limiting counters expire within a few days. The "remember this device" token
+        expires after 30 days, after which you'll verify again. None of this technical
+        bookkeeping needs any action from you. It deletes itself on schedule.</p>
 
         <p><strong>Where it lives:</strong> on Google Cloud infrastructure (Firestore and Cloud
-        Storage), in a project separate from any other project the operator runs.</p>
+        Storage), in a project separate from any other project the operator runs. Report emails
+        and verification codes are sent via Resend, and if you email us, that lands in a Zoho
+        mailbox. Both are the operator's own accounts, not shared with anyone else.</p>
 
         <p><strong>What we don't do:</strong> we don't sell your data, we don't use it for
         advertising, and we don't share it with anyone outside of what's strictly needed to run
         the scan itself (Google Cloud's AI models, used to analyze your site's public-facing
-        pages).</p>
+        pages) or deliver it to you (Resend, for email).</p>
 
         <p><strong>Your control:</strong> to request deletion of your scan history or email
-        address, email <a href="mailto:hello@mad-platform.org">hello@mad-platform.org</a> directly
-        — no form to fill out, no waiting period, just ask. Feedback marked "okay to use as a
-        public testimonial" may be shared publicly; anything not marked that way stays private,
-        full stop.</p>
+        address before its automatic expiry, email <a href="mailto:hello@mad-platform.org">hello@mad-platform.org</a>
+        directly. No form to fill out, no waiting period, just ask. Feedback marked "okay to use
+        as a public testimonial" may be shared publicly; anything not marked that way stays
+        private, full stop.</p>
         """,
         active="/privacy",
     )
@@ -959,25 +984,33 @@ async def faq_page() -> str:
         <ol class="trust-list">
           <li><h3>Is this actually free? What's the catch?</h3>
             <p>No catch, and there isn't a paid tier waiting behind a paywall. This is a
-            self-funded community project, not a lead-generation funnel in disguise — nobody's
+            self-funded community project, not a lead-generation funnel in disguise. Nobody's
             selling your contact info to an accessibility consultant after you scan. If you find
-            it genuinely useful, there's an optional way to chip in once the donation option is
-            live, but the scanner itself never requires it and never will.</p></li>
+            it genuinely useful, there's an optional <a href="https://buymeacoffee.com/madplatform" target="_blank" rel="noopener">way to chip in</a>,
+            but the scanner itself never requires it and never will.</p></li>
 
           <li><h3>Why do you need my email?</h3>
             <p>Exactly three reasons, no others: to send you the full report, to create your
-            private review link so only you — not anyone else who uses this tool — can see your
-            own findings, and as a basic safeguard against the free tool being abused by bots.
-            That's the entire list. Full detail in the <a href="/privacy">privacy policy</a>.</p></li>
+            private review link (so only you, not anyone else who uses this tool, can see your
+            own findings), and to prove you actually control that inbox before this free tool
+            spends anything scanning on your behalf. That's the entire list. Full detail in the
+            <a href="/privacy">privacy policy</a>.</p></li>
+
+          <li><h3>Why do I have to verify with a code? I just want to scan my site.</h3>
+            <p>Fair complaint, and it's a one-time cost, not a recurring one. Anyone can type
+            <code>someone-else@gmail.com</code> into a text box. Far fewer people can also read
+            the code that email address just received, which is exactly why a fake or mistyped
+            address never gets past this step. Verify once and this browser remembers you for
+            30 days, so every scan after the first is back to just a URL and one click.</p></li>
 
           <li><h3>Who's actually behind this?</h3>
             <p>One person, building this in the open, not a company. The code that runs this
             exact site is public: <a href="https://github.com/pandayv/mad-platform-community" target="_blank" rel="noopener">github.com/pandayv/mad-platform-community</a>.
-            That's not a marketing claim — you can read exactly what it does with your URL and
+            That's not a marketing claim. You can read exactly what it does with your URL and
             your email before you ever submit either, line by line.</p></li>
 
           <li><h3>How do I actually reach someone?</h3>
-            <p>Email <a href="mailto:hello@mad-platform.org">hello@mad-platform.org</a> — questions,
+            <p>Email <a href="mailto:hello@mad-platform.org">hello@mad-platform.org</a>: questions,
             bug reports, deletion requests, or just feedback on whether this was useful. A real
             person reads it, not a ticket queue.</p></li>
         </ol>
@@ -986,14 +1019,14 @@ async def faq_page() -> str:
         <ol class="trust-list" style="counter-reset: trust-item 3">
           <li><h3>Why is it called MAD Platform?</h3>
             <p>MAD is short for Multi-Agent Defense Platform. Multi-agent because it's genuinely
-            a team of specialized AI agents working together — one decides what to check, one
-            finds issues, one independently verifies them, one takes action — not a single model
+            a team of specialized AI agents working together: one decides what to check, one
+            finds issues, one independently verifies them, one takes action. Not a single model
             skimming your site once and guessing. Defense because that's the actual job:
             catching gaps before they become a legal problem, not just reporting on them after
             the fact.</p></li>
 
           <li><h3>What is WCAG, and why should I care?</h3>
-            <p>The Web Content Accessibility Guidelines — the standard nearly every digital
+            <p>The Web Content Accessibility Guidelines, the standard nearly every digital
             accessibility law and lawsuit points back to. If your site doesn't meet it, that's
             the gap that shows up in a demand letter. This tool checks your site against it, so
             you find out from a scan instead.</p></li>
@@ -1001,13 +1034,13 @@ async def faq_page() -> str:
           <li><h3>What does this tool actually do?</h3>
             <p>It scans the pages on your site that carry the most real risk, checks them with
             both rule-based and AI-assisted review, independently verifies every finding before
-            it's ever shown to you, and gives you a concrete fix for each confirmed issue — plus
+            it's ever shown to you, and gives you a concrete fix for each confirmed issue, plus
             a downloadable, tracker-importable list you can hand straight to whoever fixes your
             site.</p></li>
 
           <li><h3>What doesn't it do?</h3>
             <p>It doesn't replace a real accessibility audit or legal review, doesn't check
-            every possible WCAG criterion, and doesn't fix your site for you — it tells you what
+            every possible WCAG criterion, and doesn't fix your site for you. It tells you what
             to fix and how. Being upfront about that boundary is the whole reason the verification
             step exists: a tool that only ever tells you what you want to hear isn't actually
             protecting you.</p></li>
@@ -1015,13 +1048,13 @@ async def faq_page() -> str:
           <li><h3>Can I really trust an automated tool with something this important?</h3>
             <p>Trust the verification, not blind faith in AI. Every finding this tool shows you
             has already been independently checked by a second pass before it reaches your
-            report — that's the entire reason it's multi-agent instead of one model guessing
+            report. That's the entire reason it's multi-agent instead of one model guessing
             once. It still isn't a lawyer, and it says so, repeatedly, on purpose.</p></li>
 
           <li><h3>I need real legal help, not just a scan.</h3>
             <p>Fair, and this tool will tell you the same thing: it can tell you what's wrong
             technically; it can't tell you what your specific legal exposure is. Talk to a
-            qualified accessibility or ADA attorney for that — this scan is a useful first step
+            qualified accessibility or ADA attorney for that. This scan is a useful first step
             toward that conversation, not a substitute for it.</p></li>
         </ol>
         """,
