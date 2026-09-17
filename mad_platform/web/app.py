@@ -938,15 +938,17 @@ async def privacy_page() -> str:
         email itself) in a cookie on your own browser so you're not asked to re-verify on your
         next scan.</p>
 
-        <p><strong>Why we collect it:</strong> the email is how your report is delivered and how
-        the per-scan review link is scoped to you specifically, so no one else who uses this tool
-        can see your findings. It's also the only way we have of finding out whether this free
-        tool is actually helping real businesses. Confirming it with a one-time code, rather than
-        just taking your word for it, is what keeps this free tool usable for real people instead
-        of bots submitting fake addresses. A couple of quieter, invisible checks run alongside it
-        too (confirming a submission wasn't a script), before a scan is even queued. The IP
-        address of each request is used briefly for rate limiting, the same reason any free
-        public tool has to, to keep it usable and not overwhelmed.</p>
+        <p><strong>Why we collect it:</strong> most importantly, a verified email is how we make
+        sure this free tool is actually helping real people, not being drained by bots or
+        scammers running up a scan bill on our end for nothing. Confirming it with a one-time
+        code, rather than just taking your word for it, is what makes that verification real:
+        anyone can type an address, a code sent to that inbox is what proves someone's actually
+        there to receive it. A couple of quieter, invisible checks run alongside it too
+        (confirming a submission wasn't a script), before a scan is even queued. Beyond
+        anti-abuse, the email is also how your report reaches you and how the per-scan review
+        link is scoped to you specifically, so no one else who uses this tool can see your
+        findings. The IP address of each request is used briefly for rate limiting, the same
+        reason any free public tool has to, to keep it usable and not overwhelmed.</p>
 
         <p><strong>How long we keep it:</strong> this is enforced automatically by the database
         itself (a Firestore TTL policy, for anyone checking), not just written here as a promise.
@@ -980,28 +982,83 @@ async def faq_page() -> str:
     return _static_page(
         "Frequently Asked Questions",
         """
-        <div class="trust-section-label">Before you trust us with your URL</div>
+        <div class="trust-section-label">What this is</div>
         <ol class="trust-list">
+          <li><h3>What does this tool actually do?</h3>
+            <p>It scans the pages on your site that carry the most real risk, checks them with
+            both rule-based and AI-assisted review, independently confirms every finding before
+            it's ever shown to you, and gives you a concrete fix for each one, plus a
+            downloadable, tracker-importable list you can hand straight to whoever fixes your
+            site. "MAD" is short for Multi-Agent Defense Platform: one agent decides what to
+            check, one finds issues, one independently confirms them, one takes action. Not a
+            single model skimming your site once and guessing.</p></li>
+
+          <li><h3>Why does this exist?</h3>
+            <p>Two reasons, in this order. First, a small business shouldn't have to find out
+            about an accessibility problem from a demand letter instead of a free scan. Second,
+            every real fix this tool produces is one more page a screen-reader user, a keyboard-
+            only user, or someone with low vision can actually use. Verified accessibility
+            tooling is normally priced for companies that can afford a consultant; this exists so
+            a business that can't still gets a real answer, and the web gets a little more usable
+            for everyone in the process.</p></li>
+
+          <li><h3>What doesn't it do?</h3>
+            <p>It doesn't replace a real accessibility audit or legal review, doesn't check
+            every possible WCAG criterion, and doesn't fix your site for you. It tells you what
+            to fix and how. Being upfront about that boundary is the whole reason confirmed
+            findings go through a second, independent check before you ever see them: a tool
+            that only tells you what you want to hear isn't actually protecting you.</p></li>
+
+          <li><h3>Can I really trust an automated tool with something this important?</h3>
+            <p>Trust the double-check, not blind faith in one model's output. Every finding
+            shown to you has already been independently confirmed by a second pass, which is the
+            entire reason this runs as several specialized agents instead of one model guessing
+            once. It still isn't a lawyer, and it says so, repeatedly, on purpose.</p></li>
+
+          <li><h3>I need real legal help, not just a scan.</h3>
+            <p>This tool will tell you the same thing: it can tell you what's wrong technically,
+            it can't tell you what your specific legal exposure is. Talk to a qualified
+            accessibility or ADA attorney for that. This scan is a useful first step toward that
+            conversation, not a substitute for it.</p></li>
+
+          <li><h3>What is WCAG?</h3>
+            <p>The Web Content Accessibility Guidelines, the standard nearly every digital
+            accessibility law and lawsuit points back to. If your site doesn't meet it, that's
+            the gap that shows up in a demand letter. This tool checks your site against it, so
+            you find out from a scan instead.</p></li>
+        </ol>
+
+        <div class="trust-section-label">How you can help</div>
+        <ol class="trust-list" style="counter-reset: trust-item 6">
+          <li><h3>This helped me. How can I support it?</h3>
+            <p>Three ways, no obligation attached, and none of them cost more than a minute:</p>
+            <ul style="margin:8px 0 0;padding-left:20px;line-height:1.9">
+              <li><a href="https://buymeacoffee.com/madplatform" target="_blank" rel="noopener">Chip in a few dollars</a>
+              if the scan saved you the cost of a manual audit.</li>
+              <li><a href="mailto:hello@mad-platform.org">Send a quick testimonial or bit of feedback</a>,
+              even a sentence. It's the main way to know this is actually helping.</li>
+              <li>Mention it to another small-business owner who might need it. Word of mouth
+              is this project's entire marketing budget.</li>
+            </ul></li>
+        </ol>
+
+        <div class="trust-section-label">Trust, privacy, and keeping this free from abuse</div>
+        <ol class="trust-list" style="counter-reset: trust-item 7">
           <li><h3>Is this actually free? What's the catch?</h3>
             <p>No catch, and there isn't a paid tier waiting behind a paywall. This is a
             self-funded community project, not a lead-generation funnel in disguise. Nobody's
-            selling your contact info to an accessibility consultant after you scan. If you find
-            it genuinely useful, there's an optional <a href="https://buymeacoffee.com/madplatform" target="_blank" rel="noopener">way to chip in</a>,
-            but the scanner itself never requires it and never will.</p></li>
+            selling your contact info to an accessibility consultant after you scan.</p></li>
 
-          <li><h3>Why do you need my email?</h3>
-            <p>Exactly three reasons, no others: to send you the full report, to create your
-            private review link (so only you, not anyone else who uses this tool, can see your
-            own findings), and to prove you actually control that inbox before this free tool
-            spends anything scanning on your behalf. That's the entire list. Full detail in the
-            <a href="/privacy">privacy policy</a>.</p></li>
-
-          <li><h3>Why do I have to verify with a code? I just want to scan my site.</h3>
-            <p>Fair complaint, and it's a one-time cost, not a recurring one. Anyone can type
-            <code>someone-else@gmail.com</code> into a text box. Far fewer people can also read
-            the code that email address just received, which is exactly why a fake or mistyped
-            address never gets past this step. Verify once and this browser remembers you for
-            30 days, so every scan after the first is back to just a URL and one click.</p></li>
+          <li><h3>Why do you need my email, and why a verification code?</h3>
+            <p>The main reason first: a verified email is what keeps this a tool for real people
+            instead of something bots or spam scripts quietly drain for free, since a scan isn't
+            free to run on this end even when it's free to you. Anyone can type an address; a
+            code sent to that inbox is what actually proves someone's there to receive it, which
+            is why a fake or mistyped address never gets past this step. Two smaller reasons ride
+            along: it's how your report reaches you, and it scopes your private review link so
+            nobody else who uses this tool can see your findings. Verify once and this browser
+            remembers you for 30 days, so it's a one-time cost, not a recurring one. Full detail
+            in the <a href="/privacy">privacy policy</a>.</p></li>
 
           <li><h3>Who's actually behind this?</h3>
             <p>One person, building this in the open, not a company. The code that runs this
@@ -1013,49 +1070,6 @@ async def faq_page() -> str:
             <p>Email <a href="mailto:hello@mad-platform.org">hello@mad-platform.org</a>: questions,
             bug reports, deletion requests, or just feedback on whether this was useful. A real
             person reads it, not a ticket queue.</p></li>
-        </ol>
-
-        <div class="trust-section-label">What it does and doesn't do</div>
-        <ol class="trust-list" style="counter-reset: trust-item 3">
-          <li><h3>Why is it called MAD Platform?</h3>
-            <p>MAD is short for Multi-Agent Defense Platform. Multi-agent because it's genuinely
-            a team of specialized AI agents working together: one decides what to check, one
-            finds issues, one independently verifies them, one takes action. Not a single model
-            skimming your site once and guessing. Defense because that's the actual job:
-            catching gaps before they become a legal problem, not just reporting on them after
-            the fact.</p></li>
-
-          <li><h3>What is WCAG, and why should I care?</h3>
-            <p>The Web Content Accessibility Guidelines, the standard nearly every digital
-            accessibility law and lawsuit points back to. If your site doesn't meet it, that's
-            the gap that shows up in a demand letter. This tool checks your site against it, so
-            you find out from a scan instead.</p></li>
-
-          <li><h3>What does this tool actually do?</h3>
-            <p>It scans the pages on your site that carry the most real risk, checks them with
-            both rule-based and AI-assisted review, independently verifies every finding before
-            it's ever shown to you, and gives you a concrete fix for each confirmed issue, plus
-            a downloadable, tracker-importable list you can hand straight to whoever fixes your
-            site.</p></li>
-
-          <li><h3>What doesn't it do?</h3>
-            <p>It doesn't replace a real accessibility audit or legal review, doesn't check
-            every possible WCAG criterion, and doesn't fix your site for you. It tells you what
-            to fix and how. Being upfront about that boundary is the whole reason the verification
-            step exists: a tool that only ever tells you what you want to hear isn't actually
-            protecting you.</p></li>
-
-          <li><h3>Can I really trust an automated tool with something this important?</h3>
-            <p>Trust the verification, not blind faith in AI. Every finding this tool shows you
-            has already been independently checked by a second pass before it reaches your
-            report. That's the entire reason it's multi-agent instead of one model guessing
-            once. It still isn't a lawyer, and it says so, repeatedly, on purpose.</p></li>
-
-          <li><h3>I need real legal help, not just a scan.</h3>
-            <p>Fair, and this tool will tell you the same thing: it can tell you what's wrong
-            technically; it can't tell you what your specific legal exposure is. Talk to a
-            qualified accessibility or ADA attorney for that. This scan is a useful first step
-            toward that conversation, not a substitute for it.</p></li>
         </ol>
         """,
         active="/faq",
