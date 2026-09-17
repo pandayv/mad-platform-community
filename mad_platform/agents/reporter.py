@@ -275,7 +275,7 @@ header .meta {{ color: var(--muted); font-size: 13.5px; margin-top: 4px; }}
 <div class="page">
   <header>
     <div>
-      <a class="brand" href="{app_base_url}" style="text-decoration:none"><span class="dot-b"></span>MAD Platform · Accessibility Report</a>
+      <a class="brand" href="{app_base_url}" style="text-decoration:none">{brand_mark}MAD Platform · Accessibility Report</a>
       <h1>{title_url}</h1>
       <div class="meta">Generated {generated_at} &middot; <a href="{app_base_url}">Scan another site</a></div>
     </div>
@@ -395,6 +395,7 @@ async def draft_report(
         dashboard_row=theme.dashboard_row(score, score_color(score), counts, p_counts),
         findings_section=findings_section,
         app_base_url=_APP_BASE_URL,
+        brand_mark=theme.BRAND_MARK,
     )
     return html, exec_summary, score, counts
 
