@@ -328,8 +328,8 @@ def _render_form(error: str | None = None) -> str:
 
 <section class="view section">
   <div class="section-head">
-    <h2>How it works</h2>
-    <p>One field to start. No account, no setup.</p>
+    <div class="rule-eyebrow"><span class="line"></span><span>How it works</span><span class="line"></span></div>
+    <h2>Paste your URL. <em>No account, no setup, no catch.</em></h2>
   </div>
   <div class="how-visual">
     <div class="how-step">
