@@ -118,6 +118,14 @@ checkout form field is worse than a decorative image on a footer link).
 
 Assign severity as one of: critical, high, medium, low.
 
+Write risk_rationale in plain language for a small-business owner, not a
+developer -- describe who's affected and what breaks for them (e.g. "a
+blind visitor using a screen reader can't tell what this button does
+before clicking it"), not WCAG terminology or technical jargon. One
+sentence. suggested_fix stays technical (the actual markup/attribute
+change) -- that split is deliberate, this field is the "why it matters"
+a non-technical reader needs, the fix is for whoever implements it.
+
 Give a concrete suggested fix for each -- not "fix the alt text" but the
 actual text/attribute/markup change that would resolve it, inferred from
 the finding's description.
@@ -244,7 +252,7 @@ def _finding_row(
     <div class="finding-detail">{_esc(r.risk_rationale)}</div>
   </td>
   <td>{_esc(r.page_url)}</td>
-  <td class="num mono">{r.risk_score:.0f}</td>
+  <td class="num">{_esc(r.severity.capitalize())} <span class="mono" style="color:var(--muted);font-size:11px">{r.risk_score:.0f}/100</span></td>
   <td class="fix-cell">{_esc(r.suggested_fix)}</td>
   <td>{_status_badge(ticket, escalation_id, review_url)}</td>
 </tr>"""
@@ -267,9 +275,9 @@ header .meta {{ color: var(--muted); font-size: 13.5px; margin-top: 4px; }}
 <div class="page">
   <header>
     <div>
-      <div class="brand"><span class="dot-b"></span>MAD Platform · Accessibility Report</div>
+      <a class="brand" href="{app_base_url}" style="text-decoration:none"><span class="dot-b"></span>MAD Platform · Accessibility Report</a>
       <h1>{title_url}</h1>
-      <div class="meta">Generated {generated_at}</div>
+      <div class="meta">Generated {generated_at} &middot; <a href="{app_base_url}">Scan another site</a></div>
     </div>
     {score_dial}
   </header>
@@ -328,7 +336,7 @@ async def draft_report(
     escalation_by_finding: dict[int, str] | None = None,
     job_id: str | None = None,
     review_token: str | None = None,
-) -> str:
+) -> tuple[str, str, int, dict[str, int]]:
     """The fixed report template -- same structure every run, only the data
     changes. Single format (HTML): easiest to generate reliably, opens
     anywhere, and is the one genuinely user-friendly format a business
@@ -341,6 +349,12 @@ async def draft_report(
     their own uncertain findings immediately, not an admin on their
     behalf. Either being None (e.g. no owner_contact on the job) falls
     back to a plain non-clickable badge.
+
+    Returns (html, exec_summary, score, counts) rather than just html --
+    the caller (orchestrator.py) needs exec_summary/score/counts again to
+    build the separate email summary (draft_email_summary, below), and
+    exec_summary specifically is an LLM call: returning it here instead of
+    having the caller regenerate it avoids paying for that twice.
     """
     ticket_by_finding = ticket_by_finding or {}
     escalation_by_finding = escalation_by_finding or {}
@@ -371,7 +385,7 @@ async def draft_report(
   <tbody>{rows}</tbody>
 </table>"""
 
-    return _HTML_TEMPLATE.format(
+    html = _HTML_TEMPLATE.format(
         title_url=_esc(url),
         generated_at=_esc(generated_at),
         exec_summary=_esc(exec_summary),
@@ -382,3 +396,107 @@ async def draft_report(
         findings_section=findings_section,
         app_base_url=_APP_BASE_URL,
     )
+    return html, exec_summary, score, counts
+
+
+# Literal hex, not CSS custom properties -- email clients (Gmail especially)
+# strip <style> blocks from HTML pasted into a message body, so a value like
+# var(--crit) would resolve to nothing. These mirror theme.py's light-mode
+# palette (the only one that makes sense for email -- no reliable dark-mode
+# media query support across clients).
+_EMAIL_SEVERITY_COLOR = {
+    "critical": "#C0152B",
+    "high": "#C2570A",
+    "medium": "#A67C00",
+    "low": "#47566B",
+}
+
+
+def draft_email_summary(
+    url: str,
+    ranked: list[RankedFinding],
+    score: int,
+    counts: dict[str, int],
+    exec_summary: str,
+    report_url: str,
+    csv_url: str,
+) -> str:
+    """A separate, deliberately much simpler rendering for the email body --
+    not draft_report()'s template reused. That template is a full standalone
+    document (its own <html>/<head>/<style>), and nesting one HTML document
+    inside another (the email's own body) is invalid; Gmail and most other
+    clients respond by stripping the inner <style>/<head> entirely, which is
+    exactly the unstyled wall of text this replaces. Table-based layout with
+    inline style="" attributes throughout is what actually survives across
+    email clients -- no <style> block, no flexbox/grid.
+
+    Deliberately not the full findings table (dense code-snippet fix cells
+    don't work at email width/without real styling) -- just the score, the
+    severity breakdown, and the top few findings by risk, with a prominent
+    link to the real, fully-styled report for anyone who wants the rest.
+    """
+    color = score_color(score)
+    sev_cells = "".join(
+        f'<td style="padding:10px 4px;text-align:center">'
+        f'<div style="font-size:20px;font-weight:700;color:{_EMAIL_SEVERITY_COLOR[sev]}">{counts.get(sev, 0)}</div>'
+        f'<div style="font-size:10px;letter-spacing:0.05em;color:#5B6B6A;text-transform:uppercase">{sev}</div></td>'
+        for sev in ("critical", "high", "medium", "low")
+    )
+
+    top = sorted(ranked, key=lambda r: r.risk_score, reverse=True)[:3]
+    top_rows = "".join(
+        f'<tr><td style="padding:12px 0;border-top:1px solid #E5E7EB">'
+        f'<span style="display:inline-block;background:{_EMAIL_SEVERITY_COLOR.get(r.severity.lower(), "#47566B")}22;'
+        f'color:{_EMAIL_SEVERITY_COLOR.get(r.severity.lower(), "#47566B")};font-size:11px;font-weight:700;'
+        f'padding:2px 8px;border-radius:10px;text-transform:uppercase">{_esc(r.severity)}</span> '
+        f'<span style="font-size:13px;color:#5B6B6A">WCAG {_esc(r.wcag_criterion)}</span>'
+        f'<div style="font-size:14px;color:#12181A;margin-top:4px;line-height:1.5">{_esc(r.risk_rationale)}</div>'
+        f"</td></tr>"
+        for r in top
+    )
+    more_note = (
+        f'<p style="font-size:13px;color:#5B6B6A;margin:12px 0 0">+ {len(ranked) - 3} more finding(s) in the full report.</p>'
+        if len(ranked) > 3
+        else ""
+    )
+
+    return f"""
+<div style="font-family:-apple-system,Segoe UI,Roboto,Arial,sans-serif;max-width:560px;margin:0 auto">
+  <div style="padding-bottom:20px">
+    <div style="font-size:12px;letter-spacing:0.05em;text-transform:uppercase;color:#0B6E66;font-weight:700">MAD Platform &middot; Accessibility Report</div>
+    <div style="font-size:19px;font-weight:700;color:#12181A;margin-top:4px">{_esc(url)}</div>
+  </div>
+
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#F5F7F7;border-radius:10px;margin-bottom:20px">
+    <tr>
+      <td style="padding:20px;width:76px;vertical-align:top">
+        <div style="width:64px;height:64px;border-radius:50%;border:5px solid {color};text-align:center;line-height:54px;font-size:22px;font-weight:800;color:{color}">{score}</div>
+      </td>
+      <td style="padding:20px 20px 20px 0;vertical-align:top">
+        <div style="font-size:11px;letter-spacing:0.05em;color:#5B6B6A;text-transform:uppercase;margin-bottom:6px">Site score</div>
+        <div style="font-size:14px;color:#12181A;line-height:1.5">{_esc(exec_summary)}</div>
+      </td>
+    </tr>
+  </table>
+
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-bottom:8px">
+    <tr>{sev_cells}</tr>
+  </table>
+
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-bottom:20px">
+    {top_rows}
+  </table>
+  {more_note}
+
+  <table role="presentation" cellpadding="0" cellspacing="0" style="margin:24px 0">
+    <tr>
+      <td style="padding-right:10px">
+        <a href="{report_url}" style="display:inline-block;background:#0B6E66;color:#ffffff;font-size:14px;font-weight:600;padding:12px 22px;border-radius:7px;text-decoration:none">View full report &rarr;</a>
+      </td>
+      <td>
+        <a href="{csv_url}" style="display:inline-block;background:#ffffff;color:#0B6E66;font-size:14px;font-weight:600;padding:12px 22px;border-radius:7px;text-decoration:none;border:1px solid #0B6E66">Download CSV</a>
+      </td>
+    </tr>
+  </table>
+</div>
+"""

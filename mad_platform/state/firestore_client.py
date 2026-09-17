@@ -31,11 +31,30 @@ _KB_VERSION = _client.collection("knowledge_base_version").document("wcag")
 _LEARNED_PATTERNS = _client.collection("learned_patterns")  # SME-confirmed Analyst/Editor patterns
 _USAGE = _client.collection("usage_counters")  # anti-abuse rate limits + the monthly scan budget
 _FEEDBACK = _client.collection("feedback")  # immediate "was this helpful" responses, testimonial source
+_EMAIL_CODES = _client.collection("email_verifications")  # doc id = normalized email
+_DEVICES = _client.collection("verified_devices")  # doc id = sha256(device cookie token)
 
 # Community-fork limits -- adjust here, not scattered through call sites.
 MAX_SCANS_PER_EMAIL_PER_DAY = 3
 MAX_SCANS_PER_IP_PER_DAY = 15  # TEMP: raised for benchmark testing, revert to 5 after (see DECISIONS_LOG.md)
 MAX_SCANS_PER_MONTH = 500  # a scan-count proxy for the $ budget, see DECISIONS_LOG.md
+
+# Email verification -- pattern adapted from a sibling project's own
+# battle-tested login-code flow (reviewed read-only for reference, not
+# copied wholesale: that system tracks per-process in-memory cooldowns,
+# which doesn't work here since scan-onboarding runs multiple concurrent
+# Cloud Run instances with no shared memory -- Firestore is the only
+# consistent place to keep this state, same reason the scan quota above
+# already lives here instead of in a dict).
+EMAIL_CODE_TTL_MINUTES = 10
+MAX_CODE_ATTEMPTS = 5
+# Required gap (seconds) before the Nth code request for the same email;
+# index clamped to the last entry once it's reached. First two requests
+# are instant, then the wait grows -- slows a flood without ever
+# permanently locking out someone whose first email just landed in spam.
+CODE_REQUEST_COOLDOWNS = [0, 0, 60, 300, 900]
+CODE_REQUEST_RESET_AFTER_SECONDS = 3600
+REMEMBER_DEVICE_DAYS = 30
 
 # Stages, in order -- used to answer "what's the next incomplete stage".
 PAGE_STAGES = ["crawled", "analyzed", "verified"]
@@ -422,3 +441,124 @@ def _set_page_field(job_id: str, page_url: str, fields: dict) -> None:
 
     doc_ref = _JOBS.document(job_id)
     doc_ref.set({"pages": {page_url: fields}, "updated_at": datetime.now(timezone.utc)}, merge=True)
+
+
+def code_request_cooldown_remaining(email: str) -> float:
+    """Seconds to wait before another verification-code request for this
+    email is allowed (0 if allowed now). See CODE_REQUEST_COOLDOWNS above --
+    a quiet period longer than CODE_REQUEST_RESET_AFTER_SECONDS resets the
+    schedule back to the start, so this only ever slows a burst, never
+    locks someone out permanently.
+    """
+    key = email.strip().lower()
+    doc = _EMAIL_CODES.document(key).get()
+    timestamps = doc.to_dict().get("request_log", []) if doc.exists else []
+    if not timestamps:
+        return 0
+    now = datetime.now(timezone.utc)
+    last = timestamps[-1]
+    if (now - last).total_seconds() > CODE_REQUEST_RESET_AFTER_SECONDS:
+        return 0
+    idx = min(len(timestamps), len(CODE_REQUEST_COOLDOWNS) - 1)
+    required_gap = CODE_REQUEST_COOLDOWNS[idx]
+    return max(0.0, required_gap - (now - last).total_seconds())
+
+
+def generate_email_code(email: str) -> str:
+    """Creates a fresh 6-digit code for this email, replacing any previous
+    one and resetting the wrong-attempt counter -- a new request always
+    gets a clean slate. Also records this request in the cooldown log
+    (trimmed to what CODE_REQUEST_COOLDOWNS can ever reference; older
+    entries are dead weight once the schedule range is exceeded).
+
+    expires_at doubles as this doc's Firestore TTL field (see
+    DECISIONS_LOG.md) -- a verification code has no reason to outlive its
+    own 10-minute relevance window, let alone the request log next to it.
+    """
+    key = email.strip().lower()
+    now = datetime.now(timezone.utc)
+    code = f"{secrets.randbelow(1_000_000):06d}"
+    expires_at = now + timedelta(minutes=EMAIL_CODE_TTL_MINUTES)
+
+    doc_ref = _EMAIL_CODES.document(key)
+    doc = doc_ref.get()
+    timestamps = doc.to_dict().get("request_log", []) if doc.exists else []
+    if timestamps and (now - timestamps[-1]).total_seconds() > CODE_REQUEST_RESET_AFTER_SECONDS:
+        timestamps = []
+    timestamps = (timestamps + [now])[-len(CODE_REQUEST_COOLDOWNS) :]
+
+    doc_ref.set(
+        {
+            "code": code,
+            "code_expires_at": expires_at,
+            "attempts": 0,
+            "request_log": timestamps,
+            "expires_at": now + timedelta(hours=1),
+        }
+    )
+    return code
+
+
+def verify_email_code(email: str, code: str) -> bool:
+    """Checks a submitted code against the pending one for this email.
+    Wrong guesses increment the attempt counter; hitting MAX_CODE_ATTEMPTS
+    clears the code entirely (forces a fresh request rather than leaving
+    an exhausted-but-technically-still-correct code sitting there). A
+    correct guess clears it too -- single-use, same as the reference this
+    was adapted from.
+    """
+    key = email.strip().lower()
+    doc_ref = _EMAIL_CODES.document(key)
+    doc = doc_ref.get()
+    if not doc.exists:
+        return False
+    data = doc.to_dict()
+    attempts = data.get("attempts", 0)
+    expires_at = data.get("code_expires_at")
+    valid = (
+        attempts < MAX_CODE_ATTEMPTS
+        and bool(code)
+        and code == data.get("code")
+        and expires_at is not None
+        and datetime.now(timezone.utc) < expires_at
+    )
+    if not valid:
+        new_attempts = attempts + 1
+        if new_attempts >= MAX_CODE_ATTEMPTS:
+            doc_ref.update({"code": firestore.DELETE_FIELD, "code_expires_at": firestore.DELETE_FIELD, "attempts": new_attempts})
+        else:
+            doc_ref.update({"attempts": new_attempts})
+        return False
+
+    doc_ref.update({"code": firestore.DELETE_FIELD, "code_expires_at": firestore.DELETE_FIELD, "attempts": 0})
+    return True
+
+
+def set_verified_device(token_hash: str, email: str) -> None:
+    """Remembers that this device (identified by the hash of an opaque
+    cookie token -- the raw token itself never touches Firestore, same
+    reasoning as never storing a password in plaintext) has verified this
+    specific email. Deliberately keyed by token hash, not email -- a
+    second device verifying the same email gets its own row instead of
+    evicting the first (matches the reference: two browsers/devices for
+    one person shouldn't fight over a single remembered slot).
+    """
+    expires_at = datetime.now(timezone.utc) + timedelta(days=REMEMBER_DEVICE_DAYS)
+    _DEVICES.document(token_hash).set({"email": email.strip().lower(), "expires_at": expires_at})
+
+
+def get_verified_device_email(token_hash: str) -> str | None:
+    """Returns the email this device last verified, or None if there's no
+    record or it's expired. Expired-but-undeleted rows are harmless here
+    (a Firestore TTL policy reaps them) -- this just also checks the
+    timestamp directly so expiry takes effect immediately, not only once
+    the TTL sweep gets to it.
+    """
+    doc = _DEVICES.document(token_hash).get()
+    if not doc.exists:
+        return None
+    data = doc.to_dict()
+    expires_at = data.get("expires_at")
+    if expires_at is None or datetime.now(timezone.utc) >= expires_at:
+        return None
+    return data.get("email")
