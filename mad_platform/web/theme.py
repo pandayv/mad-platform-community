@@ -195,7 +195,9 @@ h2 { font-family: "Newsreader", Georgia, serif; font-weight: 600; font-size: 21p
 .site-footer a { color: var(--muted); text-decoration: none; }
 .site-footer a:hover { color: var(--brand-dark); }
 
-/* ---- landing v3: Google-style hero, one clean scan bar, no card chrome ---- */
+/* ---- landing v4: one merged pill -- URL field and submit fused into a
+   single bar, closer to how a search engine's own home page reads, not
+   a labeled form. ---- */
 .hero-block { max-width: 640px; margin: 0 auto; padding: 24px 24px 40px; text-align: center; }
 .hero-title {
   font-size: 52px; font-weight: 600; letter-spacing: -0.015em; margin: 0 0 14px;
@@ -210,16 +212,34 @@ h2 { font-family: "Newsreader", Georgia, serif; font-weight: 600; font-size: 21p
    lines (~95px, narrow phones) heights. */
 .scan-section { max-width: 640px; margin: 0 auto; padding: 0 24px 8px; scroll-margin-top: 90px; }
 .scan-form { display: flex; flex-direction: column; gap: 12px; }
+
+/* The bar itself carries the glass surface; the input and button inside
+   it are bare (no border/background of their own) so the pair reads as
+   one continuous object, not two things glued together. */
+.scan-bar {
+  display: flex; align-items: center; gap: 6px; box-sizing: border-box;
+  border: 1px solid var(--glass-border); background: var(--glass-strong);
+  border-radius: 999px; padding: 6px 6px 6px 22px;
+  box-shadow: var(--glass-shadow);
+  backdrop-filter: blur(20px) saturate(160%); -webkit-backdrop-filter: blur(20px) saturate(160%);
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+.scan-bar:focus-within { border-color: var(--brand); box-shadow: 0 0 0 3px var(--brand-tint), var(--glass-shadow); }
+.scan-bar input {
+  flex: 1; min-width: 0; border: none; background: none; outline: none;
+  padding: 11px 0; font-size: 16px; font-family: inherit; color: var(--ink);
+}
+.scan-bar input::placeholder { color: var(--muted); }
+.scan-bar .scan-submit {
+  flex-shrink: 0; border-radius: 999px !important; padding: 11px 22px !important; margin: 0;
+  font-size: 14px;
+}
+
+/* Every OTHER field in the funnel (email step, code step) keeps the
+   plainer boxed-field treatment -- only the homepage's URL entry gets the
+   merged-pill emphasis, since it's the one field on the page. */
 .scan-field { position: relative; }
-/* Compound selector (class + element + attribute) so this reliably beats
-   the older global input[type=url] rule later in this file regardless of
-   source order -- that equal-specificity, later-wins conflict is exactly
-   why the URL field used to have a visible box and the email field next
-   to it didn't (email isn't type=url, so it never matched that rule).
-   Each field carries its own glass surface now -- no outer card wraps
-   them, so the fields read as the page's only "boxed" elements, closer
-   to how a search bar sits bare on its own page. */
-.scan-field input[type=url], .scan-field input[type=email] {
+.scan-field input {
   display: block; width: 100%; box-sizing: border-box; margin: 0;
   border: 1px solid var(--glass-border); background: var(--glass-strong); color: var(--ink);
   border-radius: 12px; padding: 13px 16px; font-size: 15.5px; font-family: inherit;
@@ -228,34 +248,16 @@ h2 { font-family: "Newsreader", Georgia, serif; font-weight: 600; font-size: 21p
 }
 .scan-field input::placeholder { color: var(--muted); }
 .scan-field input:focus { outline: none; border-color: var(--brand); box-shadow: 0 0 0 3px var(--brand-tint); }
-.scan-field:has(.info-tip) input[type=email] { padding-right: 44px; }
-.scan-field .info-tip { position: absolute; right: 13px; top: 50%; transform: translateY(-50%); }
 .scan-submit {
   align-self: flex-end; justify-content: center; font-size: 14px;
   border-radius: 10px !important; padding: 10px 20px !important; margin-top: 2px;
 }
 @media (max-width: 640px) { .hero-title { font-size: 38px; } .scan-submit { align-self: stretch; } }
-
-/* tooltip: replaces a permanently-visible sentence of fine print next to
-   the email field. Shows on hover AND focus (not hover-only) so it's
-   reachable by keyboard, and the input itself carries the same text via
-   aria-describedby so a screen reader user gets it without needing to
-   trigger the tooltip at all. */
-.info-tip { position: relative; display: inline-flex; margin-left: 4px; }
-.tip-icon {
-  width: 20px; height: 20px; border-radius: 50%; flex-shrink: 0;
-  background: var(--surface-alt); border: 1px solid var(--border-strong); color: var(--muted);
-  font-size: 11px; font-weight: 700; font-family: "JetBrains Mono", monospace;
-  display: flex; align-items: center; justify-content: center; cursor: help;
+@media (max-width: 480px) {
+  .scan-bar { flex-wrap: wrap; border-radius: 22px; padding: 16px 18px 16px 20px; }
+  .scan-bar input { flex-basis: 100%; padding: 2px 0 12px; }
+  .scan-bar .scan-submit { flex: 1; align-self: auto !important; }
 }
-.tip-text {
-  position: absolute; bottom: calc(100% + 10px); right: -10px; width: 220px;
-  background: var(--ink); color: var(--surface); font-size: 12.5px; line-height: 1.5; font-weight: 500;
-  padding: 11px 13px; border-radius: 10px; box-shadow: var(--shadow); text-align: left;
-  opacity: 0; transform: translateY(4px); pointer-events: none; transition: opacity 0.15s ease, transform 0.15s ease;
-  z-index: 5;
-}
-.info-tip:hover .tip-text, .info-tip:focus-within .tip-text { opacity: 1; transform: translateY(0); }
 
 /* No border here on purpose: a 1px divider under mix-blend-mode:overlay
    (the scan beam passes over this whole section) flares into a bright,

@@ -28,7 +28,7 @@ import logging
 import os
 import secrets
 import time
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit
 
 import httpx
 from fastapi import FastAPI, Form, HTTPException, Request
@@ -301,14 +301,14 @@ def _render_form(error: str | None = None) -> str:
 
   <div class="scan-section" id="scan">
     <form class="scan-form" action="/scan/start" method="post" aria-label="Scan your website for accessibility issues">
-      <div class="scan-field">
+      <div class="scan-bar">
         <label class="sr-only" for="url">Website URL</label>
-        <input id="url" type="url" name="url" placeholder="Enter your website URL" required autofocus>
+        <input id="url" type="text" inputmode="url" name="url" placeholder="yourwebsite.com" autocapitalize="off" autocorrect="off" spellcheck="false" required autofocus>
+        <button type="submit" class="scan-submit">Scan my site &rarr;</button>
       </div>
       <input type="text" name="website" tabindex="-1" autocomplete="off" aria-hidden="true" style="position:absolute;left:-9999px;width:1px;height:1px;opacity:0">
       <input type="hidden" name="form_ts" value="{int(time.time())}">
       {turnstile_widget}
-      <button type="submit" class="scan-submit">Scan my site &rarr;</button>
     </form>
     {error_html}
     <div class="mad-lockup centered">
@@ -1049,8 +1049,33 @@ async def _safe_url_or_error(url: str) -> tuple[str | None, str | None]:
     carries a URL forward (not just the first), since it arrives as a
     plain form/query value each time and nothing stops it being tampered
     with between steps.
+
+    The url field is deliberately type="text", not type="url" -- a bare
+    domain like "cahm.org" typed without a scheme is exactly how most
+    non-technical visitors actually type a website address (with or
+    without "www.", and whether or not they're pointing at a specific
+    page like "cahm.org/about"), and type="url"'s native browser
+    validation rejects that outright before the form is ever submitted
+    (a real bug: it showed a generic "enter a URL" browser tooltip on a
+    perfectly real address).
+
+    "://" presence, not urlsplit(url).scheme, decides whether a scheme is
+    missing -- urlsplit alone is ambiguous on a bare "host:port" with no
+    scheme (urlsplit("cahm.org:8080").scheme comes back "cahm.org", not
+    ""; RFC 3986 genuinely can't tell "scheme:opaque" from "host:port"
+    without more context), which would wrongly reject a bare domain that
+    happens to specify a port. When a scheme prefix IS present, the whole
+    original string is used completely untouched apart from that -- never
+    parsed apart and reconstructed -- so a path/query/fragment
+    ("cahm.org/about/team?x=1#y") survives exactly as typed either way.
     """
     url = url.strip()
+    if url and "://" not in url:
+        url = f"https://{url}"
+    elif url:
+        scheme = urlsplit(url).scheme.lower()
+        if scheme not in ("http", "https"):
+            return None, "Please enter an http:// or https:// website URL."
     try:
         await asyncio.wait_for(asyncio.to_thread(assert_safe_target, url), timeout=3.0)
     except UnsafeTargetError:
