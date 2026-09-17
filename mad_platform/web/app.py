@@ -256,7 +256,7 @@ def _site_header(active: str = "/", show_cta: bool = True) -> str:
     links = "".join(_link(href, label) for href, label in _NAV_LINKS)
     cta = '<a class="cta" href="/#scan">Scan a site</a>' if show_cta else ""
     return f"""<header class="site-header"><div class="site-header-inner">
-  <a class="brand" href="/"><span class="dot-b"></span>MAD Platform</a>
+  <a class="brand" href="/">{theme.BRAND_MARK}MAD Platform</a>
   <nav class="site-nav">{links}{cta}</nav>
 </div></header>"""
 
@@ -302,9 +302,10 @@ def _render_form(error: str | None = None) -> str:
   <div class="scan-section" id="scan">
     <form class="scan-form" action="/scan/start" method="post" aria-label="Scan your website for accessibility issues">
       <div class="scan-bar">
+        {theme.BRAND_MARK}
         <label class="sr-only" for="url">Website URL</label>
-        <input id="url" type="text" inputmode="url" name="url" placeholder="yourwebsite.com" autocapitalize="off" autocorrect="off" spellcheck="false" required autofocus>
-        <button type="submit" class="scan-submit">Scan my site &rarr;</button>
+        <input id="url" type="text" inputmode="url" name="url" placeholder="Enter your website URL" autocapitalize="off" autocorrect="off" spellcheck="false" required autofocus>
+        <button type="submit" class="scan-submit">Scan</button>
       </div>
       <input type="text" name="website" tabindex="-1" autocomplete="off" aria-hidden="true" style="position:absolute;left:-9999px;width:1px;height:1px;opacity:0">
       <input type="hidden" name="form_ts" value="{int(time.time())}">
@@ -632,7 +633,7 @@ __FONT_LINK__
 <body>
 <div class="scan-beam" id="scan-beam" aria-hidden="true" style="display:none"></div>
 <div class="page">
-  <div class="brand"><a href="/" style="color:inherit;text-decoration:none"><span class="dot-b"></span>MAD Platform</a></div>
+  <div class="brand"><a href="/" style="color:inherit;text-decoration:none">{theme.BRAND_MARK}MAD Platform</a></div>
   <h1 id="heading">__URL__</h1>
   <div class="tagline" id="tagline">This runs the real pipeline: page selection, parallel analysis, independent verification, ranking, ticket filing.</div>
   <div class="error-box" id="slow-warning" style="display:none;margin-bottom:16px">
@@ -942,7 +943,7 @@ async def privacy_page() -> str:
         sure this free tool is actually helping real people, not being drained by bots or
         scammers running up a scan bill on our end for nothing. Confirming it with a one-time
         code, rather than just taking your word for it, is what makes that verification real:
-        anyone can type an address, a code sent to that inbox is what proves someone's actually
+        anyone can type an address; a code sent to that inbox is what proves someone's actually
         there to receive it. A couple of quieter, invisible checks run alongside it too
         (confirming a submission wasn't a script), before a scan is even queued. Beyond
         anti-abuse, the email is also how your report reaches you and how the per-scan review
@@ -995,23 +996,21 @@ async def faq_page() -> str:
 
           <li><h3>Why does this exist?</h3>
             <p>To make the internet a little more usable for everyone. This free tool exists so a
-            small business finds out about an accessibility gap from a scan, not a demand letter,
-            and can fix it before it becomes a legal problem. Every page fixed this way is one
+            small business finds out about an accessibility gap from a proactive scan, not a
+            demand letter, and can fix it before it becomes a legal problem. Every page fixed this way is one
             more page a screen-reader user, a keyboard-only user, or someone with low vision can
             actually get through.</p></li>
 
           <li><h3>What doesn't it do?</h3>
             <p>It doesn't replace a real accessibility audit or legal review, doesn't check
             every possible WCAG criterion, and doesn't fix your site for you. It tells you what
-            to fix and how. Being upfront about that boundary is the whole reason confirmed
-            findings go through a second, independent check before you ever see them: a tool
-            that only tells you what you want to hear isn't actually protecting you.</p></li>
+            to fix and how. That boundary is deliberate: a tool that only tells you what you
+            want to hear isn't actually protecting you.</p></li>
 
           <li><h3>Can I really trust an automated tool with something this important?</h3>
-            <p>Trust the double-check, not blind faith in one model's output. Every finding
-            shown to you has already been independently confirmed by a second pass, which is the
-            entire reason this runs as several specialized agents instead of one model guessing
-            once. It still isn't a lawyer, and it says so, repeatedly, on purpose.</p></li>
+            <p>As much as any tool built by one person can promise: yes. A finding that doesn't
+            survive the independent check described above never reaches your report at all.
+            It's dropped, not shown to you as a maybe.</p></li>
 
           <li><h3>I need real legal help, not just a scan.</h3>
             <p>This tool will tell you the same thing: it can tell you what's wrong technically,
@@ -1355,7 +1354,7 @@ def _render_review_login(error: str | None = None) -> str:
 </head>
 <body>
 <div class="page">
-  <div class="brand"><span class="dot-b"></span>MAD Platform</div>
+  <div class="brand">{theme.BRAND_MARK}MAD Platform</div>
   <h1>Internal review queue</h1>
   <div class="tagline">Not for customer access. Authorized reviewers only.</div>
   <div class="card glass-sheen">
@@ -1418,7 +1417,7 @@ def _render_review_list(pending: list[dict]) -> str:
 </head>
 <body>
 <div class="page wide">
-  <div class="brand"><span class="dot-b"></span>MAD Platform</div>
+  <div class="brand">{theme.BRAND_MARK}MAD Platform</div>
   <h1>Internal review queue</h1>
   <div class="tagline">{len(pending)} item(s) awaiting disposition.</div>
   <div class="card glass-sheen">{items_html}</div>
@@ -1493,7 +1492,7 @@ def _render_review_detail(e: dict, message: str | None = None) -> str:
 </head>
 <body>
 <div class="page">
-  <div class="brand"><a href="/review" style="color:inherit;text-decoration:none"><span class="dot-b"></span>MAD Platform · Review Queue</a></div>
+  <div class="brand"><a href="/review" style="color:inherit;text-decoration:none">{theme.BRAND_MARK}MAD Platform · Review Queue</a></div>
   <h1>Review item</h1>
   <div class="card glass-sheen">
     {body}
@@ -1589,7 +1588,7 @@ def _render_scoped_review_list(job_id: str, token: str, pending: list[dict]) -> 
 </head>
 <body>
 <div class="page wide">
-  <div class="brand"><span class="dot-b"></span>MAD Platform</div>
+  <div class="brand">{theme.BRAND_MARK}MAD Platform</div>
   <h1>Your review queue</h1>
   <div class="tagline">Findings from your scan that need a quick judgment call -- only you can see this.</div>
   <div class="card glass-sheen">{items_html}</div>
@@ -1638,7 +1637,7 @@ def _render_scoped_review_detail(job_id: str, token: str, e: dict, message: str 
 </head>
 <body>
 <div class="page">
-  <div class="brand"><a href="/review/link/{job_id}/{token}" style="color:inherit;text-decoration:none"><span class="dot-b"></span>MAD Platform · Your Review Queue</a></div>
+  <div class="brand"><a href="/review/link/{job_id}/{token}" style="color:inherit;text-decoration:none">{theme.BRAND_MARK}MAD Platform · Your Review Queue</a></div>
   <h1>Review item</h1>
   <div class="card glass-sheen">
     {body}

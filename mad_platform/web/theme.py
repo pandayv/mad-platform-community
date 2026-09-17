@@ -22,6 +22,20 @@ FONT_LINK = (
     '1,400&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">'
 )
 
+# Radar-scanner mark: a ring, a sweep wedge, and a "blip" for a detected
+# finding -- replaces the plain placeholder dot everywhere the wordmark
+# appears (header, footer-adjacent brand rows, report page). currentColor
+# so it inherits whatever ink/brand color the surrounding element already
+# uses, light or dark theme, no separate color wiring needed per call site.
+BRAND_MARK = (
+    '<svg class="brand-mark" viewBox="0 0 40 40" fill="none" aria-hidden="true">'
+    '<circle cx="20" cy="20" r="16" stroke="currentColor" stroke-width="1.3" opacity="0.35"/>'
+    '<path d="M20,20 L20,3.5 A16.5,16.5 0 0,1 34.3,11.7 Z" fill="currentColor" fill-opacity="0.4" transform="rotate(-10 20 20)"/>'
+    '<circle cx="20" cy="20" r="16" stroke="currentColor" stroke-width="2.6"/>'
+    '<circle cx="27" cy="12" r="2.6" fill="currentColor"/>'
+    "</svg>"
+)
+
 THEME_CSS = """
 :root {
   --ink: #12181A; --ink-soft: #3C4A49; --muted: #5B6B6A;
@@ -169,6 +183,7 @@ h2 { font-family: "Newsreader", Georgia, serif; font-weight: 600; font-size: 21p
 /* ---- site-wide header + footer, every page shell uses these ---- */
 .brand { font-size: 12px; letter-spacing: 0.09em; text-transform: uppercase; color: var(--brand-dark); font-weight: 800; display: flex; align-items: center; gap: 7px; }
 .brand .dot-b { width: 7px; height: 7px; border-radius: 50%; background: var(--brand); flex-shrink: 0; box-shadow: 0 0 0 3px var(--brand-tint); }
+.brand-mark { width: 19px; height: 19px; flex-shrink: 0; color: currentColor; vertical-align: -4px; }
 .site-header {
   position: sticky; top: 0; z-index: 40;
   border-bottom: 1px solid var(--glass-border); background: var(--glass-strong);
@@ -213,26 +228,30 @@ h2 { font-family: "Newsreader", Georgia, serif; font-weight: 600; font-size: 21p
 .scan-section { max-width: 640px; margin: 0 auto; padding: 0 24px 8px; scroll-margin-top: 90px; }
 .scan-form { display: flex; flex-direction: column; gap: 12px; }
 
-/* The bar itself carries the glass surface; the input and button inside
-   it are bare (no border/background of their own) so the pair reads as
-   one continuous object, not two things glued together. */
+/* Google-proportioned: a plain surface with a light shadow, not the
+   heavier glass-blur treatment used elsewhere on the page -- narrower
+   (~620px) and crisper reads more "sleek" than a wider glass pill did in
+   side-by-side comparison, which settled what the width complaint was
+   actually about (proportions/surface, not raw pixels). The leading
+   brand mark (not a generic magnifying glass) is the one deliberately
+   colored element in an otherwise quiet bar. */
 .scan-bar {
-  display: flex; align-items: center; gap: 6px; box-sizing: border-box;
-  border: 1px solid var(--glass-border); background: var(--glass-strong);
-  border-radius: 999px; padding: 6px 6px 6px 22px;
-  box-shadow: var(--glass-shadow);
-  backdrop-filter: blur(20px) saturate(160%); -webkit-backdrop-filter: blur(20px) saturate(160%);
+  max-width: 620px; margin: 0 auto; display: flex; align-items: center; gap: 4px; box-sizing: border-box;
+  border: 1px solid var(--border); background: var(--surface);
+  border-radius: 999px; padding: 4px 6px 4px 22px;
+  box-shadow: var(--shadow);
   transition: border-color 0.15s ease, box-shadow 0.15s ease;
 }
-.scan-bar:focus-within { border-color: var(--brand); box-shadow: 0 0 0 3px var(--brand-tint), var(--glass-shadow); }
+.scan-bar:focus-within { border-color: var(--brand); box-shadow: 0 0 0 3px var(--brand-tint), var(--shadow); }
+.scan-bar .brand-mark { color: var(--brand); width: 18px; height: 18px; }
 .scan-bar input {
   flex: 1; min-width: 0; border: none; background: none; outline: none;
-  padding: 11px 0; font-size: 16px; font-family: inherit; color: var(--ink);
+  padding: 15px 12px; font-size: 16px; font-family: inherit; color: var(--ink);
 }
 .scan-bar input::placeholder { color: var(--muted); }
 .scan-bar .scan-submit {
-  flex-shrink: 0; border-radius: 999px !important; padding: 11px 22px !important; margin: 0;
-  font-size: 14px;
+  flex-shrink: 0; border-radius: 999px !important; padding: 12px 25px !important; margin: 0;
+  font-size: 14.5px;
 }
 
 /* Every OTHER field in the funnel (email step, code step) keeps the
