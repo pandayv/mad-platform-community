@@ -994,13 +994,11 @@ async def faq_page() -> str:
             single model skimming your site once and guessing.</p></li>
 
           <li><h3>Why does this exist?</h3>
-            <p>Two reasons, in this order. First, a small business shouldn't have to find out
-            about an accessibility problem from a demand letter instead of a free scan. Second,
-            every real fix this tool produces is one more page a screen-reader user, a keyboard-
-            only user, or someone with low vision can actually use. Verified accessibility
-            tooling is normally priced for companies that can afford a consultant; this exists so
-            a business that can't still gets a real answer, and the web gets a little more usable
-            for everyone in the process.</p></li>
+            <p>To make the internet a little more usable for everyone. This free tool exists so a
+            small business finds out about an accessibility gap from a scan, not a demand letter,
+            and can fix it before it becomes a legal problem. Every page fixed this way is one
+            more page a screen-reader user, a keyboard-only user, or someone with low vision can
+            actually get through.</p></li>
 
           <li><h3>What doesn't it do?</h3>
             <p>It doesn't replace a real accessibility audit or legal review, doesn't check
