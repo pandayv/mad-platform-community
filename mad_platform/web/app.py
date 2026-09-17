@@ -83,6 +83,14 @@ async def _security_headers(request: Request, call_next):
     response.headers["X-Frame-Options"] = "DENY"
     response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
     response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+    # No Cache-Control was ever set on the HTML pages, which left every
+    # browser free to apply its own heuristic caching -- and this app is
+    # under active, frequent redesign, so a visitor's browser silently
+    # showing a stale cached page (looking "wrong" compared to what's
+    # actually deployed) is a real, not theoretical, risk. /static/* assets
+    # (images, fonts) are the one thing that's actually fine to cache.
+    if not request.url.path.startswith("/static"):
+        response.headers["Cache-Control"] = "no-store"
     return response
 
 

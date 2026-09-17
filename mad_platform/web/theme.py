@@ -213,7 +213,7 @@ h2 { font-family: "Newsreader", Georgia, serif; font-weight: 600; font-size: 21p
 /* ---- landing v4: one merged pill -- URL field and submit fused into a
    single bar, closer to how a search engine's own home page reads, not
    a labeled form. ---- */
-.hero-block { max-width: 640px; margin: 0 auto; padding: 24px 24px 40px; text-align: center; }
+.hero-block { width: 100%; max-width: 640px; margin: 0 auto; padding: 24px 24px 40px; text-align: center; box-sizing: border-box; }
 .hero-title {
   font-size: 52px; font-weight: 600; letter-spacing: -0.015em; margin: 0 0 14px;
   text-wrap: balance;
@@ -225,7 +225,7 @@ h2 { font-family: "Newsreader", Georgia, serif; font-weight: 600; font-size: 21p
    site" link, from another page) doesn't tuck it under the sticky header
    -- covers the header at both its one-line (~65px) and wrapped-to-two-
    lines (~95px, narrow phones) heights. */
-.scan-section { max-width: 640px; margin: 0 auto; padding: 0 24px 8px; scroll-margin-top: 90px; }
+.scan-section { width: 100%; max-width: 640px; margin: 0 auto; padding: 0 24px 8px; scroll-margin-top: 90px; box-sizing: border-box; }
 .scan-form { display: flex; flex-direction: column; gap: 12px; }
 
 /* Google-proportioned: a plain surface with a light shadow, not the
@@ -236,7 +236,7 @@ h2 { font-family: "Newsreader", Georgia, serif; font-weight: 600; font-size: 21p
    brand mark (not a generic magnifying glass) is the one deliberately
    colored element in an otherwise quiet bar. */
 .scan-bar {
-  max-width: 620px; margin: 0 auto; display: flex; align-items: center; gap: 4px; box-sizing: border-box;
+  width: 100%; max-width: 620px; margin: 0 auto; display: flex; align-items: center; gap: 4px; box-sizing: border-box;
   border: 1px solid var(--border); background: var(--surface);
   border-radius: 999px; padding: 4px 6px 4px 22px;
   box-shadow: var(--shadow);
