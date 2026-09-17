@@ -22,17 +22,24 @@ FONT_LINK = (
     '1,400&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">'
 )
 
-# Radar-scanner mark: a ring, a sweep wedge, and a "blip" for a detected
-# finding -- replaces the plain placeholder dot everywhere the wordmark
-# appears (header, footer-adjacent brand rows, report page). currentColor
-# so it inherits whatever ink/brand color the surrounding element already
-# uses, light or dark theme, no separate color wiring needed per call site.
+# Layered-passes mark: three offset, rotated bars at varying opacity --
+# stands in for scanning across multiple dimensions (visual, structural,
+# captions), not literal scanning iconography. Checked against the
+# accessibility/security-tool space specifically (no conflict found); the
+# one cultural association worth knowing (Adidas's three-stripes mark) is
+# apparel-only in every documented dispute, and these bars are offset/
+# rotated rather than parallel stripes anyway. Replaces the plain
+# placeholder dot everywhere the wordmark appears (header, footer-adjacent
+# brand rows, report page, the scan-bar's leading icon). currentColor so
+# it inherits whatever ink/brand color the surrounding element already
+# uses, light or dark theme, no separate color wiring per call site --
+# fill-opacity (not a separate currentColor tint) is what creates the
+# layered-depth look while staying a single inherited color.
 BRAND_MARK = (
     '<svg class="brand-mark" viewBox="0 0 40 40" fill="none" aria-hidden="true">'
-    '<circle cx="20" cy="20" r="16" stroke="currentColor" stroke-width="1.3" opacity="0.35"/>'
-    '<path d="M20,20 L20,3.5 A16.5,16.5 0 0,1 34.3,11.7 Z" fill="currentColor" fill-opacity="0.4" transform="rotate(-10 20 20)"/>'
-    '<circle cx="20" cy="20" r="16" stroke="currentColor" stroke-width="2.6"/>'
-    '<circle cx="27" cy="12" r="2.6" fill="currentColor"/>'
+    '<rect x="7" y="17" width="26" height="6" rx="3" fill="currentColor" fill-opacity="0.35"/>'
+    '<rect x="10" y="10" width="26" height="6" rx="3" fill="currentColor" fill-opacity="0.65" transform="rotate(-4 23 13)"/>'
+    '<rect x="6" y="24" width="26" height="6" rx="3" fill="currentColor" transform="rotate(3 19 27)"/>'
     "</svg>"
 )
 
@@ -249,8 +256,14 @@ h2 { font-family: "Newsreader", Georgia, serif; font-weight: 600; font-size: 21p
   padding: 15px 12px; font-size: 16px; font-family: inherit; color: var(--ink);
 }
 .scan-bar input::placeholder { color: var(--muted); }
+/* height + padding:0 (not the base button's vertical padding) is the
+   actual fix -- the button and the input next to it had different
+   vertical paddings (12px vs 15px), so even though align-items:center
+   centered them relative to each other, their different heights read as
+   a few pixels of misalignment. Matching them to the same explicit
+   height removes that regardless of either element's own font metrics. */
 .scan-bar .scan-submit {
-  flex-shrink: 0; border-radius: 999px !important; padding: 12px 25px !important; margin: 0;
+  flex-shrink: 0; height: 48px; border-radius: 999px !important; padding: 0 25px !important; margin: 0;
   font-size: 14.5px;
 }
 
@@ -288,8 +301,17 @@ h2 { font-family: "Newsreader", Georgia, serif; font-weight: 600; font-size: 21p
 
 .section { max-width: 980px; margin: 0 auto; padding: 56px 24px; }
 .section-head { text-align: center; margin-bottom: 56px; }
-.section-head h2 { font-size: 26px; margin-bottom: 8px; }
+.section-head h2 { font-size: 30px; font-weight: 500; line-height: 1.3; margin-bottom: 8px; text-wrap: balance; }
+.section-head h2 em { font-style: italic; font-weight: 600; color: var(--brand-dark); }
 .section-head p { color: var(--muted); font-size: 14.5px; margin: 0; }
+
+/* Eyebrow-with-rule-line, replacing a plain section label where a section
+   gets the fuller title treatment (h2 mixing a plain weight with an
+   italic accent clause via the em rule above) -- the technique a flat
+   centered h2 alone couldn't deliver, independent of font size. */
+.rule-eyebrow { display: flex; align-items: center; gap: 10px; justify-content: center; margin-bottom: 14px; }
+.rule-eyebrow .line { width: 26px; height: 1px; background: var(--brand); opacity: 0.5; }
+.rule-eyebrow span { font-family: "JetBrains Mono", monospace; font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--brand-dark); font-weight: 700; }
 
 /* how it works: real screenshots, numbered */
 .how-visual { display: flex; align-items: flex-start; justify-content: center; gap: 56px; flex-wrap: wrap; }
