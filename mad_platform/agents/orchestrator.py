@@ -24,7 +24,7 @@ from pydantic import BaseModel
 from mad_platform.agents.action_agent import LOW_CONFIDENCE_THRESHOLD, route_and_file
 from mad_platform.agents.analyst import RawFinding, analyze_page
 from mad_platform.agents.editor import VerifiedFinding, verify_findings
-from mad_platform.agents.reporter import RankedFinding, draft_report, rank_and_recommend
+from mad_platform.agents.reporter import RankedFinding, draft_email_summary, draft_report, rank_and_recommend
 from mad_platform.state import firestore_client as fs
 from mad_platform.state import storage_client
 from mad_platform.tools import notify
@@ -371,7 +371,7 @@ async def run_one_time_scan(
 
         logger.info("[%s] Phase: generating_report (Gemini call)", job_id)
         fs.set_job_phase(job_id, "generating_report")
-        report = await draft_report(
+        report, exec_summary, score, counts = await draft_report(
             url, ranked, ticket_by_finding, escalation_by_finding, job_id=job_id, review_token=review_token
         )
         report_uri = storage_client.save_report(job_id, report)
@@ -398,7 +398,26 @@ async def run_one_time_scan(
             review_url = (
                 f"{_APP_BASE_URL}/review/link/{job_id}/{review_token}" if review_lines and review_token else None
             )
-            notify.send_report_email(recipient, url, report, review_lines=review_lines, review_url=review_url)
+            email_summary = draft_email_summary(
+                url,
+                ranked,
+                score,
+                counts,
+                exec_summary,
+                report_url=f"{_APP_BASE_URL}/report/{job_id}",
+                csv_url=f"{_APP_BASE_URL}/report/{job_id}/tickets.csv",
+            )
+            # CSV export is CsvIssueSink-specific, not part of every IssueSink
+            # (MockIssueSink, used in tests/local runs, has no tickets to
+            # export) -- getattr keeps this optional rather than coupling
+            # the orchestrator to one concrete sink implementation.
+            export_fn = getattr(issue_sink, "export", None)
+            attachments = [("report.html", report.encode("utf-8"))]
+            if export_fn:
+                attachments.append(("tickets.csv", export_fn().encode("utf-8")))
+            notify.send_report_email(
+                recipient, url, email_summary, review_lines=review_lines, review_url=review_url, attachments=attachments
+            )
     except Exception as exc:  # noqa: BLE001
         if job_id is not None:  # only unset if fs.create_job itself is what failed
             fs.fail_job(job_id, str(exc))

@@ -5,7 +5,7 @@ scan-onboarding Cloud Run service. On-demand, manual scans only --
 recurring/event-driven triggers (GitHub webhook, Scheduler) are a
 separate, not-yet-built layer.
 
-A scan takes 30-90s and does real memory-heavy work (Playwright,
+A scan takes 2-3 minutes and does real memory-heavy work (Playwright,
 multiple Gemini calls) -- too much to run in-process on the same
 container that's serving everyone else's requests. POST /scan enqueues a
 Cloud Task instead and redirects immediately to a status page that polls
@@ -21,11 +21,14 @@ Run locally: .venv/bin/uvicorn mad_platform.web.app:app --reload --port 8080
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import html
 import json
 import logging
 import os
+import secrets
 import time
+from urllib.parse import quote
 
 import httpx
 from fastapi import FastAPI, Form, HTTPException, Request
@@ -38,7 +41,7 @@ from mad_platform.agents.pattern_miner import resolve_pattern_escalation
 from mad_platform.agents.wcag_auto_heal import resolve_kb_escalation
 from mad_platform.state import firestore_client as fs
 from mad_platform.state import storage_client
-from mad_platform.tools import abuse_guard
+from mad_platform.tools import abuse_guard, notify
 from mad_platform.tools.issue_sink import CsvIssueSink
 from mad_platform.tools.url_safety import UnsafeTargetError, assert_safe_target
 from mad_platform.web import theme
@@ -167,6 +170,42 @@ async def _turnstile_passed(token: str) -> bool:
         # down -- fail open here, same as an unset secret key.
         return True
 
+
+# Email verification: a visitor proves they control an email once (a
+# 6-digit code, see firestore_client.generate_email_code), and this
+# browser is remembered for DEVICE_COOKIE_DAYS afterward -- the landing
+# page itself only ever asks for a URL. The cookie carries an opaque
+# random token; only its hash is ever stored server-side (never the raw
+# token), same reasoning as never storing a password in plaintext -- a
+# leaked Firestore doc can't be replayed as a cookie.
+_DEVICE_COOKIE = "mad_verified_device"
+_DEVICE_COOKIE_DAYS = fs.REMEMBER_DEVICE_DAYS
+
+
+def _hash_device_token(raw: str) -> str:
+    return hashlib.sha256(raw.encode()).hexdigest()
+
+
+def _verified_email(request: Request) -> str | None:
+    token = request.cookies.get(_DEVICE_COOKIE)
+    if not token:
+        return None
+    return fs.get_verified_device_email(_hash_device_token(token))
+
+
+def _set_device_cookie(resp: Response, request: Request, email: str) -> None:
+    raw_token = secrets.token_urlsafe(32)
+    fs.set_verified_device(_hash_device_token(raw_token), email)
+    resp.set_cookie(
+        _DEVICE_COOKIE,
+        raw_token,
+        max_age=_DEVICE_COOKIE_DAYS * 86400,
+        httponly=True,
+        samesite="lax",
+        secure=_is_https(request),
+    )
+
+
 # The SME review queue is a separate trust boundary from the public scan
 # form -- REQUIREMENTS §5.6 is explicit that it "must not be exposed to
 # the customer/business owner". The session cookie just holds the code
@@ -178,6 +217,18 @@ _REVIEW_COOKIE = "mad_review_session"
 
 def _is_reviewer(request: Request) -> bool:
     return not _REVIEW_CODE or request.cookies.get(_REVIEW_COOKIE) == _REVIEW_CODE
+
+
+def _is_https(request: Request) -> bool:
+    """secure=True only over https. Cloud Run terminates TLS at its own edge
+    and forwards plain http to the container, and uvicorn isn't started with
+    --proxy-headers, so request.url.scheme itself would always read "http"
+    here even in production -- checking X-Forwarded-Proto (which Cloud Run
+    always sets, regardless of that flag) is what actually distinguishes
+    production from local dev (uvicorn --reload on plain http, where this
+    header is simply absent). Shared by every cookie-setting route.
+    """
+    return request.headers.get("x-forwarded-proto") == "https" or request.url.scheme == "https"
 
 _BASE_STYLE = theme.THEME_CSS
 
@@ -239,7 +290,6 @@ def _render_form(error: str | None = None) -> str:
 <style>{_BASE_STYLE}</style>
 </head>
 <body>
-<div class="scan-beam" aria-hidden="true"></div>
 {_site_header("/", show_cta=False)}
 
 <section class="view">
@@ -250,18 +300,10 @@ def _render_form(error: str | None = None) -> str:
   </div>
 
   <div class="scan-section" id="scan">
-    <form class="scan-form" action="/scan" method="post" aria-label="Scan your website for accessibility issues">
+    <form class="scan-form" action="/scan/start" method="post" aria-label="Scan your website for accessibility issues">
       <div class="scan-field">
         <label class="sr-only" for="url">Website URL</label>
         <input id="url" type="url" name="url" placeholder="Enter your website URL" required autofocus>
-      </div>
-      <div class="scan-field">
-        <label class="sr-only" for="email">Your email</label>
-        <input id="email" type="email" name="email" placeholder="Your email" required autocomplete="email" aria-describedby="email-tip">
-        <span class="info-tip" tabindex="0">
-          <span class="tip-icon" aria-hidden="true">?</span>
-          <span class="tip-text" id="email-tip" role="tooltip">We'll send your full report here, and use it to keep this free tool honest about whether it's actually helping. Never shared, never sold.</span>
-        </span>
       </div>
       <input type="text" name="website" tabindex="-1" autocomplete="off" aria-hidden="true" style="position:absolute;left:-9999px;width:1px;height:1px;opacity:0">
       <input type="hidden" name="form_ts" value="{int(time.time())}">
@@ -278,11 +320,11 @@ def _render_form(error: str | None = None) -> str:
 <section class="view section">
   <div class="section-head">
     <h2>How it works</h2>
-    <p>Two steps, no account, no setup.</p>
+    <p>One field to start. No account, no setup.</p>
   </div>
   <div class="how-visual">
     <div class="how-step">
-      <div class="shot-frame glass-sheen"><span class="step-badge">1</span><img src="/static/how-step1.png" alt="The scan form: enter your website URL and email"></div>
+      <div class="shot-frame glass-sheen"><span class="step-badge">1</span><img src="/static/how-step1.png" alt="The scan form: enter your website URL"></div>
       <h3>Enter your site</h3>
     </div>
     <div class="how-step">
@@ -501,6 +543,83 @@ def _render_form(error: str | None = None) -> str:
 """
 
 
+def _verification_page(title: str, tagline: str, body_html: str, error: str | None = None) -> str:
+    """Shared chrome for the email/code interstitial screens -- same
+    header/footer as every other page (see the landing-page nav-
+    consistency fix), just a narrower single-purpose card instead of the
+    homepage's full marketing layout.
+    """
+    error_html = f'<div class="error-box">{html.escape(error)}</div>' if error else ""
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{title} | MAD Platform</title>
+{theme.FONT_LINK}
+<style>{_BASE_STYLE}</style>
+</head>
+<body>
+{_site_header("/", show_cta=False)}
+<div class="page with-site-header" style="max-width:440px">
+  <h1>{title}</h1>
+  <p class="tagline">{tagline}</p>
+  <div class="card glass-sheen">{body_html}</div>
+  {error_html}
+</div>
+{_site_footer()}
+</body>
+</html>"""
+
+
+def _render_email_step(url: str, error: str | None = None) -> str:
+    body = f"""
+      <form action="/scan/request-code" method="post">
+        <input type="hidden" name="url" value="{html.escape(url)}">
+        <div class="scan-field">
+          <label class="sr-only" for="email">Your email</label>
+          <input id="email" type="email" name="email" placeholder="Your email" required autocomplete="email" autofocus>
+        </div>
+        <input type="text" name="website" tabindex="-1" autocomplete="off" aria-hidden="true" style="position:absolute;left:-9999px;width:1px;height:1px;opacity:0">
+        <input type="hidden" name="form_ts" value="{int(time.time())}">
+        <button type="submit" class="scan-submit">Send verification code &rarr;</button>
+      </form>
+      <div class="tagline" style="margin:16px 0 0">
+        <b>Why we ask:</b> so we can send you the report for {html.escape(url)}, create a private
+        review link only you can see, and keep this free tool from being abused by bots. This is
+        the only time you'll need to do this &mdash; this browser stays verified for
+        {_DEVICE_COOKIE_DAYS} days, so your next scan skips straight to the result.
+      </div>
+    """
+    return _verification_page("Verify your email", "One quick step, then we'll run your scan.", body, error)
+
+
+def _render_code_step(url: str, email: str, error: str | None = None) -> str:
+    body = f"""
+      <p class="tagline" style="margin:0 0 16px">Code sent to <b>{html.escape(email)}</b>.</p>
+      <form action="/scan/verify-code" method="post">
+        <input type="hidden" name="url" value="{html.escape(url)}">
+        <input type="hidden" name="email" value="{html.escape(email)}">
+        <div class="scan-field">
+          <label class="sr-only" for="code">Verification code</label>
+          <input id="code" type="text" name="code" placeholder="6-digit code" inputmode="numeric" pattern="[0-9]*" maxlength="6" required autofocus autocomplete="one-time-code">
+        </div>
+        <button type="submit" class="scan-submit">Verify &amp; scan &rarr;</button>
+      </form>
+      <div class="tagline" style="margin:16px 0 0;display:flex;justify-content:space-between">
+        <form action="/scan/request-code" method="post" style="display:inline">
+          <input type="hidden" name="url" value="{html.escape(url)}">
+          <input type="hidden" name="email" value="{html.escape(email)}">
+          <input type="text" name="website" tabindex="-1" autocomplete="off" aria-hidden="true" style="position:absolute;left:-9999px;width:1px;height:1px;opacity:0">
+          <input type="hidden" name="form_ts" value="{int(time.time())}">
+          <button type="submit" class="link-btn">Resend code</button>
+        </form>
+        <a href="/scan/email?url={quote(url)}">Use a different email</a>
+      </div>
+    """
+    return _verification_page("Enter your code", "Expires in 10 minutes.", body, error)
+
+
 _STATUS_PAGE = """<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -511,12 +630,13 @@ __FONT_LINK__
 <style>__STYLE__</style>
 </head>
 <body>
+<div class="scan-beam" id="scan-beam" aria-hidden="true" style="display:none"></div>
 <div class="page">
   <div class="brand"><a href="/" style="color:inherit;text-decoration:none"><span class="dot-b"></span>MAD Platform</a></div>
   <h1 id="heading">__URL__</h1>
   <div class="tagline" id="tagline">This runs the real pipeline: page selection, parallel analysis, independent verification, ranking, ticket filing.</div>
   <div class="error-box" id="slow-warning" style="display:none;margin-bottom:16px">
-    This is taking longer than usual (3+ minutes). Most scans finish in under 90s -- the
+    This is taking longer than usual (4+ minutes). Most scans finish in 2-3 minutes -- the
     site may be unusually heavy, or something may need attention. Feel free to keep
     waiting, or come back and check this page later.
   </div>
@@ -599,7 +719,7 @@ function tickElapsed() {
   const el = document.getElementById("elapsed");
   if (el) el.textContent = elapsedText();
   const warn = document.getElementById("slow-warning");
-  if (warn && startTimeMs && (Date.now() - startTimeMs) / 1000 > 180) {
+  if (warn && startTimeMs && (Date.now() - startTimeMs) / 1000 > 240) {
     warn.style.display = "block";
   }
 }
@@ -620,6 +740,7 @@ function stageDot(stage) {
 }
 
 function renderQueued(data) {
+  document.getElementById("scan-beam").style.display = "none";
   document.getElementById("heading").textContent = "Queued: " + data.url;
   document.getElementById("tagline").textContent =
     "Waiting for a scan slot to free up -- this happens automatically, usually within a couple of minutes.";
@@ -631,6 +752,7 @@ function renderQueued(data) {
 }
 
 function renderInProgress(data) {
+  document.getElementById("scan-beam").style.display = "block";
   if (!startTimeMs && (data.started_at || data.created_at)) startTimeMs = new Date(data.started_at || data.created_at).getTime();
   document.getElementById("heading").textContent = "Scanning " + data.url;
   const phaseLabel = PHASE_LABELS[data.phase] || "Starting...";
@@ -646,6 +768,7 @@ function renderInProgress(data) {
 }
 
 function renderCompleted(data) {
+  document.getElementById("scan-beam").style.display = "none";
   finished = true;
   const s = data.summary;
   document.getElementById("heading").textContent = "Scan complete";
@@ -673,6 +796,7 @@ function renderCompleted(data) {
 }
 
 function renderFailed(data) {
+  document.getElementById("scan-beam").style.display = "none";
   finished = true;
   document.getElementById("heading").textContent = "Scan failed";
   document.getElementById("content").innerHTML =
@@ -745,7 +869,8 @@ async def terms_page() -> str:
             no corporate entity, no support team, and no legal department behind these terms,
             only the person running it and the public code doing the work:
             <a href="https://github.com/pandayv/mad-platform-community" target="_blank" rel="noopener">github.com/pandayv/mad-platform-community</a>.
-            That's also where to raise an issue or ask a question about how this operates.
+            That's also where to raise an issue or ask a question about how this operates —
+            or email <a href="mailto:hello@mad-platform.org">hello@mad-platform.org</a> directly.
             Nothing here is, or should be read as, the output of a company with legal counsel on
             staff.</p></li>
 
@@ -816,9 +941,10 @@ async def privacy_page() -> str:
         pages).</p>
 
         <p><strong>Your control:</strong> to request deletion of your scan history or email
-        address, contact the operator directly (see the FAQ for how) — no form to fill out, no
-        waiting period, just ask. Feedback marked "okay to use as a public testimonial" may be
-        shared publicly; anything not marked that way stays private, full stop.</p>
+        address, email <a href="mailto:hello@mad-platform.org">hello@mad-platform.org</a> directly
+        — no form to fill out, no waiting period, just ask. Feedback marked "okay to use as a
+        public testimonial" may be shared publicly; anything not marked that way stays private,
+        full stop.</p>
         """,
         active="/privacy",
     )
@@ -849,6 +975,11 @@ async def faq_page() -> str:
             exact site is public: <a href="https://github.com/pandayv/mad-platform-community" target="_blank" rel="noopener">github.com/pandayv/mad-platform-community</a>.
             That's not a marketing claim — you can read exactly what it does with your URL and
             your email before you ever submit either, line by line.</p></li>
+
+          <li><h3>How do I actually reach someone?</h3>
+            <p>Email <a href="mailto:hello@mad-platform.org">hello@mad-platform.org</a> — questions,
+            bug reports, deletion requests, or just feedback on whether this was useful. A real
+            person reads it, not a ticket queue.</p></li>
         </ol>
 
         <div class="trust-section-label">What it does and doesn't do</div>
@@ -898,68 +1029,44 @@ async def faq_page() -> str:
     )
 
 
-@app.post("/scan")
-async def start_scan(
-    request: Request,
-    url: str = Form(...),
-    email: str = Form(...),
-    website: str = Form(""),
-    form_ts: str = Form(""),
-    turnstile_token: str = Form("", alias="cf-turnstile-response"),
-) -> Response:
-    # Honeypot: real visitors never see or fill this field (off-screen,
-    # aria-hidden, tabindex=-1). A non-empty value means a bot filled every
-    # field it could find. Same generic-looking rejection as a real
-    # validation failure -- no need to tip off a scraper that it tripped a
-    # trap specifically.
+def _honeypot_or_timing_error(website: str, form_ts: str) -> bool:
+    """True if this submission trips the honeypot or the minimum-fill-time
+    check -- shared by every form in the URL -> email -> code funnel, since
+    a bot can hit any of these routes directly without ever loading the
+    page before it.
+    """
     if website.strip():
-        return HTMLResponse(_render_form(error="Something went wrong. Please try again."), status_code=400)
-
-    # A human takes measurably longer than this to load the page, read two
-    # fields, and click submit -- catches scripted submissions that skip
-    # rendering entirely.
+        return True
     try:
-        if time.time() - float(form_ts) < abuse_guard.MIN_FORM_FILL_SECONDS:
-            return HTMLResponse(_render_form(error="Something went wrong. Please try again."), status_code=400)
+        return time.time() - float(form_ts) < abuse_guard.MIN_FORM_FILL_SECONDS
     except ValueError:
-        return HTMLResponse(_render_form(error="Something went wrong. Please try again."), status_code=400)
+        return True
 
-    if not await _turnstile_passed(turnstile_token):
-        return HTMLResponse(_render_form(error="Please complete the verification and try again."), status_code=400)
 
-    # Both checks below do a real DNS lookup, which can block for the full
-    # OS resolver timeout against a domain whose nameserver simply never
-    # answers -- an attacker-controlled domain used as the email or URL is
-    # an easy way to trigger that. This app runs a single event loop with
-    # no --workers, so a lookup that blocks the loop directly stalls every
-    # other concurrent request on this instance, not just this one -- a
-    # self-inflicted DoS from the abuse checks themselves. asyncio.to_thread
-    # moves the blocking call off the event loop; wait_for bounds how long
-    # this one request (and the thread it's running in) waits before giving
-    # up, so a hostile domain costs a few seconds of one thread, not an
-    # unbounded hang.
-    email = email.strip()
-    try:
-        email_ok, email_reason = await asyncio.wait_for(
-            asyncio.to_thread(abuse_guard.email_looks_valid, email), timeout=3.0
-        )
-    except asyncio.TimeoutError:
-        return HTMLResponse(_render_form(error="We couldn't verify that email domain in time. Please double-check it and try again."), status_code=400)
-    if not email_ok:
-        return HTMLResponse(_render_form(error=email_reason), status_code=400)
-
+async def _safe_url_or_error(url: str) -> tuple[str | None, str | None]:
+    """Validates and normalizes a submitted URL. Returns (url, None) on
+    success or (None, error_message) on failure -- run at every step that
+    carries a URL forward (not just the first), since it arrives as a
+    plain form/query value each time and nothing stops it being tampered
+    with between steps.
+    """
     url = url.strip()
     try:
         await asyncio.wait_for(asyncio.to_thread(assert_safe_target, url), timeout=3.0)
     except UnsafeTargetError:
-        return HTMLResponse(_render_form(error="Please enter a public website URL we can actually reach."), status_code=400)
+        return None, "Please enter a public website URL we can actually reach."
     except asyncio.TimeoutError:
-        return HTMLResponse(_render_form(error="We couldn't verify that URL in time. Please double-check it and try again."), status_code=400)
+        return None, "We couldn't verify that URL in time. Please double-check it and try again."
+    return url, None
 
-    # request.client.host is the direct connection IP -- if this ever sits
-    # behind a proxy/load balancer that isn't Cloud Run's own (which already
-    # gives the real client IP here), an X-Forwarded-For read would be
-    # needed instead. Fine as-is for a Cloud Run deployment.
+
+async def _start_scan(request: Request, url: str, email: str) -> Response:
+    """Common tail of the funnel, reached two ways: a returning visitor
+    whose device is already verified (skips straight here from
+    POST /scan/start), or a first-time visitor right after a correct code
+    (POST /scan/verify-code). Same quota check either path -- verification
+    proves an inbox is real, it isn't a bypass for the scan budget.
+    """
     client_ip = request.client.host if request.client else "unknown"
     allowed, reason = fs.check_and_reserve_scan_quota(email, client_ip)
     if not allowed:
@@ -967,6 +1074,103 @@ async def start_scan(
     job_id = fs.create_job(url, owner_contact=email, status="queued")
     _enqueue_scan(job_id)
     return RedirectResponse(f"/status/{job_id}", status_code=303)
+
+
+@app.post("/scan/start")
+async def scan_start(
+    request: Request,
+    url: str = Form(...),
+    website: str = Form(""),
+    form_ts: str = Form(""),
+    turnstile_token: str = Form("", alias="cf-turnstile-response"),
+) -> Response:
+    if _honeypot_or_timing_error(website, form_ts):
+        return HTMLResponse(_render_form(error="Something went wrong. Please try again."), status_code=400)
+    if not await _turnstile_passed(turnstile_token):
+        return HTMLResponse(_render_form(error="Please complete the verification and try again."), status_code=400)
+
+    url, error = await _safe_url_or_error(url)
+    if error:
+        return HTMLResponse(_render_form(error=error), status_code=400)
+
+    email = _verified_email(request)
+    if email:
+        return await _start_scan(request, url, email)
+    return RedirectResponse(f"/scan/email?url={quote(url)}", status_code=303)
+
+
+@app.get("/scan/email", response_class=HTMLResponse)
+async def scan_email_step(url: str) -> str:
+    return _render_email_step(url)
+
+
+@app.post("/scan/request-code")
+async def scan_request_code(
+    url: str = Form(...),
+    email: str = Form(...),
+    website: str = Form(""),
+    form_ts: str = Form(""),
+) -> Response:
+    url, url_error = await _safe_url_or_error(url)
+    if url_error:
+        # Shouldn't normally happen (already checked at /scan/start) unless
+        # the hidden url field was tampered with between steps -- back to
+        # the top rather than showing a URL error on the email screen.
+        return HTMLResponse(_render_form(error=url_error), status_code=400)
+
+    if _honeypot_or_timing_error(website, form_ts):
+        return HTMLResponse(_render_email_step(url, error="Something went wrong. Please try again."), status_code=400)
+
+    email = email.strip()
+    try:
+        email_ok, email_reason = await asyncio.wait_for(
+            asyncio.to_thread(abuse_guard.email_looks_valid, email), timeout=3.0
+        )
+    except asyncio.TimeoutError:
+        return HTMLResponse(
+            _render_email_step(url, error="We couldn't verify that email domain in time. Please double-check it and try again."),
+            status_code=400,
+        )
+    if not email_ok:
+        return HTMLResponse(_render_email_step(url, error=email_reason), status_code=400)
+
+    wait = fs.code_request_cooldown_remaining(email)
+    if wait > 0:
+        return HTMLResponse(
+            _render_email_step(url, error=f"Please wait about {int(wait) + 1} seconds before requesting another code."),
+            status_code=429,
+        )
+
+    code = fs.generate_email_code(email)
+    if not notify.send_verification_code_email(email, code):
+        return HTMLResponse(
+            _render_email_step(url, error="We couldn't send that code right now. Please try again in a moment."),
+            status_code=502,
+        )
+    return RedirectResponse(f"/scan/verify?url={quote(url)}&email={quote(email)}", status_code=303)
+
+
+@app.get("/scan/verify", response_class=HTMLResponse)
+async def scan_verify_step(url: str, email: str) -> str:
+    return _render_code_step(url, email)
+
+
+@app.post("/scan/verify-code")
+async def scan_verify_code(request: Request, url: str = Form(...), email: str = Form(...), code: str = Form(...)) -> Response:
+    url, url_error = await _safe_url_or_error(url)
+    if url_error:
+        return HTMLResponse(_render_form(error=url_error), status_code=400)
+
+    email = email.strip()
+    if not fs.verify_email_code(email, code.strip()):
+        return HTMLResponse(
+            _render_code_step(url, email, error="That code is invalid or has expired. Request a new one below."),
+            status_code=400,
+        )
+
+    resp = await _start_scan(request, url, email)
+    _set_device_cookie(resp, request, email)
+    return resp
 
 
 @app.get("/status/{job_id}", response_class=HTMLResponse)
@@ -1190,6 +1394,9 @@ def _render_review_detail(e: dict, message: str | None = None) -> str:
           <div class="field"><b>Evidence:</b> {html.escape(str(e.get('editor_rationale', '')))}</div>
           <div class="field"><b>Suggested fix:</b></div>
           <div class="fix-cell" style="max-width:none">{html.escape(str(e.get('suggested_fix', '')))}</div>
+          <div class="field" style="margin-top:10px;color:var(--muted);font-size:12.5px">
+            Confirming files a ticket for this finding. Dismissing discards it -- no ticket, ever.
+          </div>
         """
 
     resolved = e.get("status") == "resolved"
@@ -1240,15 +1447,7 @@ async def review_login(request: Request, code: str = Form(...)) -> Response:
     if _REVIEW_CODE and code != _REVIEW_CODE:
         return HTMLResponse(_render_review_login(error="Wrong review code."), status_code=403)
     resp = RedirectResponse("/review", status_code=303)
-    # secure=True only over https. Cloud Run terminates TLS at its own edge
-    # and forwards plain http to the container, and uvicorn isn't started
-    # with --proxy-headers, so request.url.scheme itself would always read
-    # "http" here even in production -- checking X-Forwarded-Proto (which
-    # Cloud Run always sets, regardless of that flag) is what actually
-    # distinguishes production from local dev (uvicorn --reload on plain
-    # http, where this header is simply absent).
-    is_https = request.headers.get("x-forwarded-proto") == "https" or request.url.scheme == "https"
-    resp.set_cookie(_REVIEW_COOKIE, _REVIEW_CODE or "", httponly=True, samesite="lax", secure=is_https)
+    resp.set_cookie(_REVIEW_COOKIE, _REVIEW_CODE or "", httponly=True, samesite="lax", secure=_is_https(request))
     return resp
 
 
@@ -1346,6 +1545,11 @@ def _render_scoped_review_detail(job_id: str, token: str, e: dict, message: str 
         actions = f'<div class="tagline" style="margin:0">Already resolved: {html.escape(str(e.get("disposition")))}.</div>'
     else:
         actions = f"""
+          <div class="tagline" style="margin:0 0 12px">
+            <b>Confirm</b> if this is a real problem on your site &mdash; it gets added to your ticket
+            list so it actually gets fixed. <b>Dismiss</b> if it isn't (a false positive, or something
+            you've decided not to address) &mdash; no ticket is created for it.
+          </div>
           <form action="/review/link/{job_id}/{token}/{eid}/resolve" method="post" style="display:inline-block;margin-right:10px">
             <button type="submit" name="disposition" value="confirm">Confirm</button>
           </form>
