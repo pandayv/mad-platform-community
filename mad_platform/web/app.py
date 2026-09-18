@@ -30,15 +30,21 @@ import secrets
 import time
 from urllib.parse import quote, urlsplit
 
+import hmac
+from contextlib import asynccontextmanager
+from functools import lru_cache
+
 import httpx
 from fastapi import FastAPI, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
+from google.api_core import exceptions as gcloud_exceptions
 from google.cloud import tasks_v2
 
+from mad_platform import config
 from mad_platform.agents.action_agent import resolve_escalation as resolve_finding_escalation
 from mad_platform.agents.pattern_miner import resolve_pattern_escalation
-from mad_platform.agents.wcag_auto_heal import resolve_kb_escalation
+from mad_platform.severity import SEVERITY_ORDER
 from mad_platform.state import firestore_client as fs
 from mad_platform.state import storage_client
 from mad_platform.tools import abuse_guard, notify
@@ -62,7 +68,25 @@ _mad_logger.propagate = False
 
 logger = logging.getLogger("mad_platform.web")
 
-app = FastAPI(title="MAD Platform")
+@asynccontextmanager
+async def _lifespan(_app: FastAPI):
+    """Refuse to serve if the deployment is missing required config.
+
+    This is the fail-fast that used to live in module-level
+    `os.environ[...]` reads below -- moved to startup rather than import
+    so that importing this module (a test, a tool, `python -c "import
+    mad_platform.web.app"`) does not itself require a configured GCP
+    environment. That import-time requirement is what made this codebase
+    untestable; see mad_platform/config.py. The deployment-safety property
+    is unchanged: a revision without SCAN_WORKER_URL / SCAN_QUEUE_INVOKER_SA
+    / GOOGLE_CLOUD_PROJECT still dies on startup with a message naming the
+    variable, instead of silently accepting scans it can never run.
+    """
+    config.validate_web_config()
+    yield
+
+
+app = FastAPI(title="MAD Platform", lifespan=_lifespan)
 app.mount("/static", StaticFiles(directory=os.path.join(os.path.dirname(__file__), "static")), name="static")
 
 
@@ -89,7 +113,11 @@ async def _security_headers(request: Request, call_next):
     # showing a stale cached page (looking "wrong" compared to what's
     # actually deployed) is a real, not theoretical, risk. /static/* assets
     # (images, fonts) are the one thing that's actually fine to cache.
-    if not request.url.path.startswith("/static"):
+    # /static/* assets and the content-hashed theme stylesheet set their own
+    # long-lived Cache-Control; everything else (every HTML page) is
+    # no-store. A content-hashed URL cannot go stale, so overwriting its
+    # header here would throw away the whole point of F9's fix.
+    if not (request.url.path.startswith("/static") or request.url.path == _THEME_CSS_PATH):
         response.headers["Cache-Control"] = "no-store"
     return response
 
@@ -105,45 +133,48 @@ def _issue_sink() -> CsvIssueSink:
 
 
 # ---- Cloud Tasks: /scan enqueues here instead of running the pipeline
-# in-process. All three fail fast at import time on purpose, same
-# reasoning as MAD_APP_BASE_URL elsewhere -- a fork that forgot to
-# configure the queue should not silently accept scan submissions it can
-# never actually run.
-_SCAN_WORKER_URL = os.environ["SCAN_WORKER_URL"]
-_SCAN_QUEUE_INVOKER_SA = os.environ["SCAN_QUEUE_INVOKER_SA"]
-_TASKS_CLIENT = tasks_v2.CloudTasksClient()
-_QUEUE_PATH = _TASKS_CLIENT.queue_path(
-    os.environ["GOOGLE_CLOUD_PROJECT"],
-    os.environ.get("SCAN_QUEUE_LOCATION", "us-central1"),
-    os.environ.get("SCAN_QUEUE_NAME", "scan-queue"),
-)
+# in-process. The queue's configuration is still required, not defaulted
+# -- a fork that forgot to configure the queue must not silently accept
+# scan submissions it can never actually run -- but it is now read (and
+# the client built) on first use, with _lifespan above doing the
+# fail-on-startup check. See mad_platform/config.py for why nothing here
+# may be read at import time.
+
+
+@lru_cache(maxsize=1)
+def _tasks_client() -> tasks_v2.CloudTasksClient:
+    return tasks_v2.CloudTasksClient()
+
+
+def _queue_path() -> str:
+    return _tasks_client().queue_path(
+        config.project_id(), config.scan_queue_location(), config.scan_queue_name()
+    )
 
 
 def _enqueue_scan(job_id: str) -> None:
     """job_id doubles as the Cloud Tasks task name: a second enqueue for
-    the same job_id (a double form-submit, a retried request) is rejected
-    by Cloud Tasks as a duplicate rather than starting the same scan
-    twice, no separate idempotency bookkeeping needed here.
+    the same job_id (a retried request) is rejected by Cloud Tasks as a
+    duplicate rather than starting the same scan twice, no separate
+    idempotency bookkeeping needed here.
     """
+    worker_url = config.scan_worker_url()
     task = {
-        "name": _TASKS_CLIENT.task_path(
-            os.environ["GOOGLE_CLOUD_PROJECT"],
-            os.environ.get("SCAN_QUEUE_LOCATION", "us-central1"),
-            os.environ.get("SCAN_QUEUE_NAME", "scan-queue"),
-            job_id,
+        "name": _tasks_client().task_path(
+            config.project_id(), config.scan_queue_location(), config.scan_queue_name(), job_id
         ),
         "http_request": {
             "http_method": tasks_v2.HttpMethod.POST,
-            "url": f"{_SCAN_WORKER_URL}/run",
+            "url": f"{worker_url}/run",
             "headers": {"Content-Type": "application/json"},
             "body": json.dumps({"job_id": job_id}).encode(),
             "oidc_token": {
-                "service_account_email": _SCAN_QUEUE_INVOKER_SA,
-                "audience": _SCAN_WORKER_URL,
+                "service_account_email": config.scan_queue_invoker_sa(),
+                "audience": worker_url,
             },
         },
     }
-    _TASKS_CLIENT.create_task(parent=_QUEUE_PATH, task=task)
+    _tasks_client().create_task(parent=_queue_path(), task=task)
 
 
 # scan-onboarding is deployed with --allow-unauthenticated -- a business
@@ -153,10 +184,13 @@ def _enqueue_scan(job_id: str) -> None:
 # cheapest first: a honeypot field + minimum-fill-time check (below, no
 # signup needed), then abuse_guard's email/domain checks, then
 # firestore_client's per-email/per-IP/monthly quota. Cloudflare Turnstile
-# is the next layer up -- same opt-in-via-env-var pattern as MAD_REVIEW_CODE
-# below: if TURNSTILE_SECRET_KEY is unset (no site registered yet), the
-# gate is simply open, so this is safe to leave wired in ahead of actually
-# signing up for a site key.
+# is the next layer up -- opt-in via env var: if TURNSTILE_SECRET_KEY is
+# unset (no site registered yet), the gate is simply open, so this is safe
+# to leave wired in ahead of actually signing up for a site key. Note this
+# is deliberately the OPPOSITE of MAD_REVIEW_CODE's unset behavior below,
+# which fails closed: an unset key here weakens one of several stacked
+# anti-abuse layers on a deliberately public form, while an unset code
+# there would publish an admin queue that is not meant to be public at all.
 _TURNSTILE_SITE_KEY = os.environ.get("TURNSTILE_SITE_KEY")
 _TURNSTILE_SECRET_KEY = os.environ.get("TURNSTILE_SECRET_KEY")
 
@@ -172,10 +206,27 @@ async def _turnstile_passed(token: str) -> bool:
                 "https://challenges.cloudflare.com/turnstile/v0/siteverify",
                 data={"secret": _TURNSTILE_SECRET_KEY, "response": token},
             )
+        resp.raise_for_status()
         return bool(resp.json().get("success"))
-    except httpx.HTTPError:
+    except (httpx.HTTPError, ValueError) as exc:
         # Cloudflare being unreachable shouldn't take the whole scan form
         # down -- fail open here, same as an unset secret key.
+        #
+        # ValueError is in that tuple because of a real gap, not for
+        # neatness: only httpx.HTTPError was caught, and resp.json() raises
+        # json.JSONDecodeError -- a ValueError, not an httpx error --
+        # whenever the body is not JSON. A Cloudflare 502/503 HTML error
+        # page, a captive portal, or a WAF block would all have produced an
+        # unhandled exception and a 500 on POST /scan/start for every
+        # visitor, which is the exact opposite of the fail-open this
+        # comment promises. raise_for_status() above turns a non-2xx into
+        # an httpx error before .json() ever sees the body.
+        #
+        # Logged, because a permanent silent fail-open looks identical to
+        # a working gate from the outside. This is currently latent
+        # (TURNSTILE_SECRET_KEY is unset, so the short-circuit above
+        # returns first), and arms itself the moment Turnstile is enabled.
+        logger.warning("Turnstile verification failed open (%s: %s)", type(exc).__name__, exc)
         return True
 
 
@@ -216,15 +267,42 @@ def _set_device_cookie(resp: Response, request: Request, email: str) -> None:
 
 # The SME review queue is a separate trust boundary from the public scan
 # form -- REQUIREMENTS §5.6 is explicit that it "must not be exposed to
-# the customer/business owner". The session cookie just holds the code
-# itself rather than an issued token -- a reasonable simplification for
-# this scope, not a production-grade session mechanism.
-_REVIEW_CODE = os.environ.get("MAD_REVIEW_CODE")
+# the customer/business owner". It gates /review, which lists EVERY
+# pending escalation across every scan and every user, and whose resolve
+# action on a learned_pattern permanently changes what Editor flags on
+# every future scan for everyone (DECISIONS_LOG.md: the one flow that must
+# keep a human gate).
+#
+# So: closed unless explicitly opened. `not _REVIEW_CODE or ...` used to
+# make _is_reviewer return True unconditionally when MAD_REVIEW_CODE was
+# unset -- the exact opposite of the docstring above, and one missing
+# secret binding (a new revision, a rotation, a fork, local dev) away from
+# publishing the whole queue. An unset code now means nobody gets in,
+# which is the safe direction to fail: the worst case is an admin who has
+# to set the variable, not an anonymous visitor poisoning the detection
+# pipeline.
 _REVIEW_COOKIE = "mad_review_session"
 
 
+def _review_session_value(code: str) -> str:
+    """What goes in the session cookie: a value derived from the review
+    code, not the code itself. Same single-shared-secret model as before
+    (a stolen cookie is still a credential, and this is still not a
+    production-grade session mechanism) -- but the shared secret itself no
+    longer leaves the server, so a leaked cookie can't be replayed at the
+    login form or anywhere else the code is used.
+    """
+    return hmac.new(code.encode(), b"mad-review-session", hashlib.sha256).hexdigest()
+
+
 def _is_reviewer(request: Request) -> bool:
-    return not _REVIEW_CODE or request.cookies.get(_REVIEW_COOKIE) == _REVIEW_CODE
+    code = config.review_code()
+    if not code:
+        return False  # fail CLOSED -- see the comment above
+    presented = request.cookies.get(_REVIEW_COOKIE)
+    if not presented:
+        return False
+    return hmac.compare_digest(presented, _review_session_value(code))
 
 
 def _is_https(request: Request) -> bool:
@@ -238,13 +316,73 @@ def _is_https(request: Request) -> bool:
     """
     return request.headers.get("x-forwarded-proto") == "https" or request.url.scheme == "https"
 
-_BASE_STYLE = theme.THEME_CSS
+# ---- The theme stylesheet, served once and cached forever.
+#
+# It used to be inlined into all nine page templates, on every response,
+# under the blanket `Cache-Control: no-store` below -- so every page view
+# re-downloaded ~24KB of CSS, most of it rules that page cannot use. The
+# no-store decision is right for the HTML (this app is under active
+# redesign and a stale cached page is a real risk), it just meant the CSS
+# rode along uncached with it.
+#
+# The URL carries a hash of the content, so "cache forever" is safe by
+# construction: any edit to THEME_CSS produces a different URL, and a
+# browser can never be looking at a stale stylesheet for the page it is
+# rendering. That is also why this may skip the no-store rule below.
+#
+# The stored report deliberately keeps its CSS inline (reporter.py). It has
+# to open as a standalone document from GCS, from a downloaded file, from
+# an email attachment -- a linked stylesheet would leave it unstyled
+# everywhere except this origin.
+_THEME_CSS_HASH = hashlib.sha256(theme.THEME_CSS.encode("utf-8")).hexdigest()[:12]
+_THEME_CSS_PATH = f"/theme.{_THEME_CSS_HASH}.css"
+_BASE_STYLE_LINK = f'<link rel="stylesheet" href="{_THEME_CSS_PATH}">'
 
 
-_NAV_LINKS = [("/", "Home"), ("/faq", "FAQ"), ("/terms", "Terms"), ("/privacy", "Privacy")]
+@app.get(_THEME_CSS_PATH, include_in_schema=False)
+async def theme_css() -> Response:
+    return Response(
+        content=theme.THEME_CSS,
+        media_type="text/css",
+        headers={"Cache-Control": "public, max-age=31536000, immutable"},
+    )
 
 
-def _site_header(active: str = "/", show_cta: bool = True) -> str:
+# Shared first child of every <body>: the skip link, then the page's own
+# <main id="main"> landmark. Neither existed on any of the nine pages, so a
+# screen-reader or keyboard user had to traverse the header on every page
+# with no way past it, and no landmark to jump to (WCAG 2.4.1). For a
+# product whose comparison table advertises catching exactly this class of
+# problem, it is worth more than its severity suggests.
+_SKIP_LINK = '<a class="skip-link" href="#main">Skip to main content</a>'
+
+
+# Footer gets the full sitemap-style list -- it's not space-constrained the
+# way the header is, and "every link, always available somewhere" is exactly
+# what a footer is for.
+_FOOTER_NAV_LINKS = [("/", "Home"), ("/faq", "FAQ"), ("/terms", "Terms"), ("/privacy", "Privacy")]
+
+# FAQ plus the homepage's own section anchors -- brought back after being
+# emptied out entirely in an earlier pass. That pass's actual problem was
+# never "too many links," it was that the header wrapped to two lines on
+# narrow phones with no way to collapse it; removing links was a patch on
+# that specific symptom, not a fix for it. The real fix is the .nav-toggle
+# / hamburger menu below, which collapses this list on narrow viewports
+# regardless of how many items it holds -- so the link count can be
+# whatever's actually useful again. Terms and Privacy deliberately stay
+# footer-only, not here: they're not something a visitor mid-read jumps to,
+# unlike these. Anchors use "/#..." (not bare "#...") so they resolve
+# correctly from every page this header renders on, not just the homepage.
+_HEADER_NAV_LINKS: list[tuple[str, str]] = [
+    ("/#why-it-matters", "Why it matters"),
+    ("/#how-it-works", "How it works"),
+    ("/#under-the-hood", "Under the hood"),
+    ("/#how-we-compare", "How we compare"),
+    ("/faq", "FAQ"),
+]
+
+
+def _site_header(active: str = "/") -> str:
     """The one nav shared by every marketing/content page (home, faq, terms,
     privacy). Deliberately not used on the status/review/report pages --
     those are mid-task screens (watching a scan run, resolving a finding),
@@ -252,33 +390,67 @@ def _site_header(active: str = "/", show_cta: bool = True) -> str:
     for, not a usability win. Their existing simple "brand mark links home"
     header stays as-is on purpose.
 
-    show_cta=False on the homepage itself: the scan form is already the
-    first thing on the page there, so a second "Scan a site" button in the
-    header is a redundant CTA competing with the real one. Every other page
-    (FAQ, Terms, Privacy) keeps it -- that's the one way back to the form.
+    No CTA button here, on any page: the brand mark already links to "/",
+    and "/" opens on the scan form -- so a "Scan a site" button next to it
+    would just be a second way to do what the logo already does, styled to
+    look like a distinct action.
+
+    Below 860px (.nav-toggle's own breakpoint, see theme.py) the nav
+    collapses behind a hamburger button rather than wrapping to a second
+    row or disappearing -- both icons and the panel markup always render;
+    which one is visible is CSS/JS, not two different server responses, so
+    this works identically with JS disabled except the panel can't be
+    toggled (a link-only degrade, not a broken one: every link is still
+    real markup, not injected after the fact). The toggle script is
+    inlined here rather than in a page-level <script> block so it ships
+    automatically on every page this header renders on, including the
+    plain static pages (FAQ/Terms/Privacy) that otherwise have no JS at
+    all.
     """
     def _link(href: str, label: str) -> str:
         cls = ' class="active"' if href == active else ""
         return f'<a href="{href}"{cls}>{label}</a>'
 
-    links = "".join(_link(href, label) for href, label in _NAV_LINKS)
-    cta = '<a class="cta" href="/#scan">Scan a site</a>' if show_cta else ""
+    links = "".join(_link(href, label) for href, label in _HEADER_NAV_LINKS)
     return f"""<header class="site-header"><div class="site-header-inner">
   <a class="brand" href="/">{theme.BRAND_MARK}MAD Platform</a>
-  <nav class="site-nav">{links}{cta}</nav>
-</div></header>"""
+  <button class="nav-toggle" type="button" aria-expanded="false" aria-controls="site-nav" aria-label="Menu">
+    <svg class="icon-menu" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 7h16M4 12h16M4 17h16"/></svg>
+    <svg class="icon-close" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>
+  </button>
+  <nav class="site-nav" id="site-nav">{links}</nav>
+</div></header>
+<script>
+(function(){{
+  var btn = document.querySelector(".nav-toggle"), nav = document.getElementById("site-nav");
+  if (!btn || !nav) return;
+  function close(){{ btn.setAttribute("aria-expanded", "false"); nav.classList.remove("is-open"); }}
+  function open(){{ btn.setAttribute("aria-expanded", "true"); nav.classList.add("is-open"); }}
+  btn.addEventListener("click", function(){{
+    btn.getAttribute("aria-expanded") === "true" ? close() : open();
+  }});
+  nav.addEventListener("click", function(e){{ if (e.target.tagName === "A") close(); }});
+  document.addEventListener("keydown", function(e){{ if (e.key === "Escape") close(); }});
+}})();
+</script>"""
 
 
 def _site_footer() -> str:
-    links = "".join(f'<a href="{href}">{label}</a>' for href, label in _NAV_LINKS)
-    links += '<a href="https://buymeacoffee.com/madplatform" target="_blank" rel="noopener">Buy us a coffee</a>'
+    links = "".join(f'<a href="{href}">{label}</a>' for href, label in _FOOTER_NAV_LINKS)
+    links += (
+        '<a href="https://buymeacoffee.com/madplatform" target="_blank" rel="noopener" class="support-link">'
+        '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" '
+        'stroke-linejoin="round" aria-hidden="true"><path d="M17 8h1a4 4 0 1 1 0 8h-1"/>'
+        '<path d="M3 8h14v9a4 4 0 0 1-4 4H7a4 4 0 0 1-4-4Z"/><line x1="6" y1="2" x2="6" y2="4"/>'
+        '<line x1="10" y1="2" x2="10" y2="4"/><line x1="14" y1="2" x2="14" y2="4"/></svg>Support the project</a>'
+    )
     return f"""<footer class="site-footer"><div class="site-footer-inner">
   <span>MAD Platform &middot; built during Google's All Things Agentic Hackathon, now free to use</span>
   <nav>{links}</nav>
 </div></footer>"""
 
 
-def _render_form(error: str | None = None) -> str:
+def _render_form(error: str | None = None, device_verified: bool = False) -> str:
     error_html = f'<div class="error-box">{html.escape(error)}</div>' if error else ""
     turnstile_script = (
         '<script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>'
@@ -295,56 +467,96 @@ def _render_form(error: str | None = None) -> str:
 <meta name="description" content="A free, self-serve tool that scans your website for accessibility issues, verifies what it finds, and gives you real, actionable fixes, not just a report.">
 {theme.FONT_LINK}
 {turnstile_script}
-<style>{_BASE_STYLE}</style>
+{_BASE_STYLE_LINK}
 </head>
 <body>
-{_site_header("/", show_cta=False)}
+{_SKIP_LINK}
+{_site_header("/")}
 
+<main id="main">
 <section class="view">
-  <div class="hero-block">
-    <span class="hero-eyebrow"><span class="dot-b"></span><span class="hero-eyebrow-text">Community Edition &middot; free &middot; no account needed</span></span>
-    <h1 class="hero-title"><span class="hero-title-mark">MAD</span> Platform</h1>
-    <p class="hero-tagline">Know what's exposed, before a demand letter tells you.</p>
-  </div>
+  <div class="hero-outer"><div class="hero-grid">
+    <div class="hero-copy" id="scan">
+      <span class="hero-eyebrow"><span class="dot-b"></span><span class="hero-eyebrow-text">Community Edition</span></span>
+      <h1 class="hero-title">Is your website accessible? <strong>Find out before it costs you.</strong></h1>
+      <p class="hero-tagline">Check your website's accessibility and get exactly what to fix, in plain English. Protect your business from expensive accessibility lawsuits.</p>
 
-  <div class="scan-section" id="scan">
-    <form class="scan-form" action="/scan/start" method="post" aria-label="Scan your website for accessibility issues">
-      <div class="scan-bar">
-        {theme.BRAND_MARK}
-        <label class="sr-only" for="url">Website URL</label>
-        <input id="url" type="text" inputmode="url" name="url" placeholder="Enter your website URL" autocapitalize="off" autocorrect="off" spellcheck="false" required autofocus>
-        <button type="submit" class="scan-submit">Scan</button>
+      <div class="scan-section">
+        <form class="scan-form" action="/scan/start" method="post" aria-label="Scan your website for accessibility issues">
+          <div class="scan-bar">
+            {theme.BRAND_MARK}
+            <label class="sr-only" for="url">Website URL</label>
+            <input id="url" type="text" inputmode="url" name="url" placeholder="Enter your website URL" autocapitalize="off" autocorrect="off" spellcheck="false" required autofocus>
+            <button type="submit" class="scan-submit">Scan</button>
+          </div>
+          <input type="text" name="website" tabindex="-1" autocomplete="off" aria-hidden="true" style="position:absolute;left:-9999px;width:1px;height:1px;opacity:0">
+          <input type="hidden" name="form_ts" value="{int(time.time())}">
+          {turnstile_widget}
+        </form>
+        {error_html}
+        {
+          '<p class="scan-hint"><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M5 13l4 4L19 7"/></svg>Device recognized. Your scan starts instantly.</p>'
+          if device_verified else
+          '<p class="scan-hint scan-hint-tip"><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18h6"/><path d="M10 22h4"/><path d="M12 2a7 7 0 0 0-4 12.7c.6.5 1 1.3 1 2.1v.2h6v-.2c0-.8.4-1.6 1-2.1A7 7 0 0 0 12 2Z"/></svg>First scan requires email verification to prevent abuse.</p>'
+        }
       </div>
-      <input type="text" name="website" tabindex="-1" autocomplete="off" aria-hidden="true" style="position:absolute;left:-9999px;width:1px;height:1px;opacity:0">
-      <input type="hidden" name="form_ts" value="{int(time.time())}">
-      {turnstile_widget}
-    </form>
-    {error_html}
-    <div class="mad-lockup centered">
-      <span class="hl">M</span>ulti-<span class="hl">A</span>gent <span class="hl">D</span>efense <span class="hl">Platform</span> <span class="sub">for digital accessibility compliance</span>
+
+      <div class="trust-row">
+        <span><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M5 13l4 4L19 7"/></svg>Open source</span>
+        <span><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M5 13l4 4L19 7"/></svg>Dedicated to community</span>
+        <span><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M5 13l4 4L19 7"/></svg>100% free</span>
+      </div>
     </div>
-  </div>
+
+    <div class="hero-visual-col">
+      <!-- Illustrative only: the numbers below ("72", "18 issues across 6
+           pages", the severity counts) are a made-up example report, not a
+           scan of anything. The mock browser chrome makes that obvious to
+           a sighted visitor; nothing conveyed it non-visually, so a screen
+           reader announced concrete-sounding scan results on a page where
+           the visitor has not run a scan. aria-hidden on the whole visual
+           plus the sr-only line below is what says so. -->
+      <p class="sr-only">Illustration: an example accessibility report, showing made-up results for a fictional site. Not a real scan.</p>
+      <div class="hero-visual" aria-hidden="true">
+        <div class="grid-lines"></div>
+        <div class="example-card">
+          <div class="browser-bar"><i></i><i></i><i></i><span class="url">yoursite.com</span></div>
+          <div class="card-body">
+            <div class="example-score-row">
+              <div class="example-score-ring">
+                <svg aria-hidden="true" viewBox="0 0 36 36">
+                  <circle class="ring-bg" cx="18" cy="18" r="15.9155" fill="none" stroke-width="3"/>
+                  <circle class="ring-fg" cx="18" cy="18" r="15.9155" fill="none" stroke-width="3" stroke-dasharray="72 100" stroke-linecap="round" transform="rotate(-90 18 18)"/>
+                </svg>
+                <span class="example-score-num">72</span>
+              </div>
+              <div class="example-score-meta">
+                <b>Accessibility score</b>
+                <span>18 issues across 6 pages</span>
+              </div>
+            </div>
+            <div class="example-sev-rows">
+              <div class="example-sev-row"><span class="dot" style="background:var(--crit)"></span>Critical<b>2</b></div>
+              <div class="example-sev-row"><span class="dot" style="background:var(--high)"></span>High<b>5</b></div>
+              <div class="example-sev-row"><span class="dot" style="background:var(--med)"></span>Medium<b>8</b></div>
+              <div class="example-sev-row"><span class="dot" style="background:var(--low)"></span>Low<b>3</b></div>
+            </div>
+          </div>
+        </div>
+        <div class="example-chip ok example-chip-1"><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M5 13l4 4L19 7"/></svg>Alt text found</div>
+        <div class="example-chip warn example-chip-2"><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 9v4M12 17h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/></svg>Low contrast &middot; 4 spots</div>
+      </div>
+      <p class="lockup-caption"><span class="hl">M</span>ulti-<span class="hl">A</span>gent <span class="hl">D</span>efense <span class="hl">Platform</span> for digital accessibility compliance</p>
+    </div>
+  </div></div>
+  <a class="scroll-hint" href="#why-it-matters" aria-label="Scroll to see more">
+    <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12l7 7 7-7"/></svg>
+  </a>
 </section>
 
-<section class="view section">
+<section class="section" id="why-it-matters">
   <div class="section-head">
-    <div class="rule-eyebrow"><span class="line"></span><span>How it works</span><span class="line"></span></div>
-    <h2>Paste your URL. <em>No account, no setup, no catch.</em></h2>
-  </div>
-  <div class="how-visual">
-    <div class="how-step">
-      <div class="shot-frame glass-sheen"><span class="step-badge">1</span><img src="/static/how-step1.png" alt="The scan form: enter your website URL"></div>
-      <h3>Enter your site</h3>
-    </div>
-    <div class="how-step">
-      <div class="shot-frame glass-sheen"><span class="step-badge">2</span><img src="/static/hero-dashboard.png" alt="A completed scan report: site score, severity breakdown, and a chart of issues by WCAG principle"></div>
-      <h3>See your report</h3>
-    </div>
-  </div>
-</section>
-
-<section class="view section">
-  <div class="section-head">
+    <div class="section-eyebrow"><span class="line"></span><span>The stakes</span><span class="line"></span></div>
     <h2>Why it matters</h2>
     <p>The real numbers behind the risk, not marketing copy.</p>
   </div>
@@ -390,12 +602,94 @@ def _render_form(error: str | None = None) -> str:
   <p class="stats-quote">"96% of the web's most visited sites fail basic accessibility tests. That's not a statistic, it's most of the internet simply not working for people with disabilities."</p>
 </section>
 
-<section class="view section">
+<section class="section" id="how-it-works">
   <div class="section-head">
+    <div class="section-eyebrow"><span class="line"></span><span>Process</span><span class="line"></span></div>
+    <h2>How it works</h2>
+    <p>Paste your URL. No account, no setup<sup>1</sup>, no catch.</p>
+  </div>
+  <div class="how-visual">
+    <div class="how-step">
+      <div class="shot-frame glass-sheen"><span class="step-badge">1</span><img src="/static/how-step1.png?v=20260917c" alt="The scan form: enter your website URL"></div>
+      <h3>Enter your site</h3>
+    </div>
+    <div class="how-step">
+      <div class="shot-frame glass-sheen"><span class="step-badge">2</span><img src="/static/hero-dashboard.png?v=20260917c" alt="A completed scan report: site score, severity breakdown, and a chart of issues by WCAG principle"></div>
+      <h3>See your report</h3>
+    </div>
+  </div>
+  <p class="how-footnote"><sup>1</sup> First-time visitors may need a one-time email verification to prevent abuse.</p>
+</section>
+
+
+
+<section class="section" id="under-the-hood">
+  <div class="section-head">
+    <div class="section-eyebrow"><span class="line"></span><span>Under the hood</span><span class="line"></span></div>
+    <h2>Why the report holds up</h2>
+    <p>Four specialized agents, not one model guessing.</p>
+  </div>
+  <div class="pipeline-flow">
+    <div class="pipeline-stage">
+      <div class="pipeline-badge"><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="2.5" fill="currentColor" stroke="none"/></svg></div>
+      <h3>Select</h3>
+      <p>Finds the pages that carry real risk.</p>
+    </div>
+    <div class="pipeline-arrow"><svg aria-hidden="true" viewBox="0 0 24 14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 7h20M14 1l7 6-7 6"/></svg></div>
+    <div class="pipeline-stage">
+      <div class="pipeline-badge"><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3 3 8l9 5 9-5-9-5Z"/><path d="M3 16l9 5 9-5"/><path d="M3 12l9 5 9-5"/></svg></div>
+      <h3>Analyze</h3>
+      <p>Rules plus AI, across visual, structural, and media checks.</p>
+    </div>
+    <div class="pipeline-arrow"><svg aria-hidden="true" viewBox="0 0 24 14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 7h20M14 1l7 6-7 6"/></svg></div>
+    <div class="pipeline-stage">
+      <div class="pipeline-badge"><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3 4 6v6c0 5 3.4 7.8 8 9 4.6-1.2 8-4 8-9V6l-8-3Z"/><path d="m9 12 2 2 4-4"/></svg></div>
+      <h3>Verify</h3>
+      <p>Independently re-checked. False alarms dropped.</p>
+    </div>
+    <div class="pipeline-arrow"><svg aria-hidden="true" viewBox="0 0 24 14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 7h20M14 1l7 6-7 6"/></svg></div>
+    <div class="pipeline-stage">
+      <div class="pipeline-badge"><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 14v4a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2v-4"/><path d="M7 9l5 5 5-5"/><path d="M12 14V2"/></svg></div>
+      <h3>Act</h3>
+      <p>Ranked by risk, exported as a ready-to-use fix list.</p>
+    </div>
+  </div>
+  <div class="arch-notes">
+    <div class="arch-note">
+      <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 4.5A2.5 2.5 0 0 1 4.5 2H12v18H4.5A2.5 2.5 0 0 0 2 22.5V4.5Z"/><path d="M22 4.5A2.5 2.5 0 0 0 19.5 2H12v18h7.5a2.5 2.5 0 0 1 2.5 2.5V4.5Z"/></svg>
+      <div><b>Grounded</b><span>Findings are checked against the real accessibility standard (WCAG) by retrieval, not the model's memory alone.</span></div>
+    </div>
+    <div class="arch-note">
+      <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 3-6.7"/><path d="M3 3v5h5"/></svg>
+      <div><b>Crash-safe</b><span>A scan interrupted mid-way resumes exactly where it left off, never duplicating work.</span></div>
+    </div>
+    <div class="arch-note">
+      <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-3-6.7"/><path d="M21 3v5h-5"/></svg>
+      <div><b>Self-healing</b><span>Checks whether WCAG itself has changed and refreshes the ruleset automatically.</span></div>
+    </div>
+  </div>
+</section>
+
+<section class="section" id="how-we-compare">
+  <div class="section-head">
+    <div class="section-eyebrow"><span class="line"></span><span>The comparison</span><span class="line"></span></div>
     <h2>How we compare</h2>
     <p>What we actually checked, not marketing copy.</p>
   </div>
-  <div class="compare-wrap">
+  <p class="compare-hint" id="compare-hint">Swipe or use the arrow keys to see all columns &rarr;</p>
+  <!-- tabindex="0" is load-bearing, not decoration: this wrapper is
+       overflow-x:auto around a min-width:560px table, so below 560px a
+       keyboard-only user could reach the first column and nothing else --
+       a WCAG 2.1.1 (Keyboard) failure, in the very table whose first row
+       advertises catching this class of problem. A scrollable region needs
+       to be focusable to be scrollable by keyboard. role="region" +
+       aria-label give it a name once it is focusable, and the hint text
+       (previously pointer-only, "Swipe...") now names the keyboard route
+       too. -->
+  <!-- aria-label, not aria-labelledby="compare-hint": that hint is
+       display:none above 640px, and a name that only exists at phone
+       widths is not a name. -->
+  <div class="compare-wrap" tabindex="0" role="region" aria-label="Feature comparison: MAD Platform, free scanners and paid audit tools">
     <table class="compare-table">
       <thead>
         <tr>
@@ -418,10 +712,10 @@ def _render_form(error: str | None = None) -> str:
           <td><span class="mark-yes" aria-hidden="true">&check;</span><span class="sr-only">Yes</span></td>
         </tr>
         <tr>
-          <th scope="row">Independent verification</th>
-          <td class="mad-col"><span class="mark-yes" aria-hidden="true">&check;</span><span class="sr-only">Yes, automatic</span></td>
+          <th scope="row">Reviews actual screenshots</th>
+          <td class="mad-col"><span class="mark-yes" aria-hidden="true">&check;</span><sup>2</sup><span class="sr-only">Yes</span></td>
           <td><span class="mark-no" aria-hidden="true">&cross;</span><span class="sr-only">No</span></td>
-          <td><span class="mark-partial">Add-on only<sup>2</sup></span></td>
+          <td><span class="mark-partial">Varies by vendor</span></td>
         </tr>
         <tr>
           <th scope="row">Audio/video captions</th>
@@ -430,16 +724,29 @@ def _render_form(error: str | None = None) -> str:
           <td><span class="mark-no" aria-hidden="true">&cross;</span><span class="sr-only">Rarely</span></td>
         </tr>
         <tr>
-          <th scope="row">Fixes your code, not a widget</th>
+          <th scope="row">Filters out false positives</th>
+          <td class="mad-col"><span class="mark-yes" aria-hidden="true">&check;</span><span class="sr-only">Yes, automatic</span></td>
+          <td><span class="mark-no" aria-hidden="true">&cross;</span><span class="sr-only">No</span></td>
+          <td><span class="mark-partial">Add-on only<sup>3</sup></span></td>
+        </tr>
+        <tr>
+          <th scope="row">Provides a fix</th>
           <td class="mad-col"><span class="mark-yes" aria-hidden="true">&check;</span><span class="sr-only">Yes</span></td>
           <td><span class="mark-yes" aria-hidden="true">&check;</span><span class="sr-only">Yes</span></td>
-          <td><span class="mark-partial">Often upsells a widget<sup>3</sup></span></td>
+          <td><span class="mark-partial">Often upsells a widget<sup>4</sup></span></td>
+        </tr>
+        <tr>
+          <th scope="row">Follows latest standards</th>
+          <td class="mad-col"><span class="mark-yes" aria-hidden="true">&check;</span><sup>5</sup><span class="sr-only">Yes, automatic</span></td>
+          <td><span class="mark-partial">Often outdated</span></td>
+          <td><span class="mark-partial">Varies by vendor</span></td>
         </tr>
       </tbody>
     </table>
   </div>
-  <p class="compare-footnote"><sup>1</sup> Confirmed: one well-known checker's free tier is explicitly single-page-only. <sup>2</sup> Human review exists, but as a separate consulting-style manual audit, not built into the automated scan. <sup>3</sup> The FTC fined a major overlay-widget vendor $1M in 2025 for overstating what its "auto-fix" can actually do.</p>
+  <p class="compare-footnote"><sup>1</sup> Most free checkers cap what's included and require a paid tier for full scans. <sup>2</sup> Rule-based scanners check the underlying code; they don't evaluate what the page actually looks like once it renders. <sup>3</sup> Automated scanners are well known for flagging non-issues; catching what they get wrong is typically a separate paid add-on for these tools. <sup>4</sup> The FTC fined a major overlay-widget vendor $1M in 2025 for overstating what its auto-fix could actually do. <sup>5</sup> MAD Platform checks the accessibility standard (WCAG) for changes and updates its rules automatically.</p>
 </section>
+</main>
 
 {_site_footer()}
 <script>
@@ -552,13 +859,21 @@ def _render_form(error: str | None = None) -> str:
 """
 
 
-def _verification_page(title: str, tagline: str, body_html: str, error: str | None = None) -> str:
+def _verification_page(
+    title: str, tagline: str, body_html: str, error: str | None = None, footnote_html: str = ""
+) -> str:
     """Shared chrome for the email/code interstitial screens -- same
     header/footer as every other page (see the landing-page nav-
     consistency fix), just a narrower single-purpose card instead of the
     homepage's full marketing layout.
+
+    footnote_html renders below the card, not inside it -- the same
+    "spacing separates it, not a border" treatment as the landing page's
+    .how-footnote, for the same reason: it's a footnote explaining the
+    step above, not part of the step itself.
     """
     error_html = f'<div class="error-box">{html.escape(error)}</div>' if error else ""
+    footnote_block = f'<p class="verify-footnote">{footnote_html}</p>' if footnote_html else ""
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -566,16 +881,18 @@ def _verification_page(title: str, tagline: str, body_html: str, error: str | No
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{title} | MAD Platform</title>
 {theme.FONT_LINK}
-<style>{_BASE_STYLE}</style>
+{_BASE_STYLE_LINK}
 </head>
 <body>
-{_site_header("/", show_cta=False)}
-<div class="page with-site-header" style="max-width:440px">
+{_SKIP_LINK}
+{_site_header("/")}
+<main id="main" class="page with-site-header" style="max-width:440px">
   <h1>{title}</h1>
   <p class="tagline">{tagline}</p>
   <div class="card glass-sheen">{body_html}</div>
+  {footnote_block}
   {error_html}
-</div>
+</main>
 {_site_footer()}
 </body>
 </html>"""
@@ -593,14 +910,15 @@ def _render_email_step(url: str, error: str | None = None) -> str:
         <input type="hidden" name="form_ts" value="{int(time.time())}">
         <button type="submit" class="scan-submit">Send verification code &rarr;</button>
       </form>
-      <div class="tagline" style="margin:16px 0 0">
-        <b>Why we ask:</b> so we can send you the report for {html.escape(url)}, create a private
-        review link only you can see, and keep this free tool from being abused by bots. This is
-        the only time you'll need to do this &mdash; this browser stays verified for
-        {_DEVICE_COOKIE_DAYS} days, so your next scan skips straight to the result.
-      </div>
     """
-    return _verification_page("Verify your email", "One quick step, then we'll run your scan.", body, error)
+    footnote = (
+        "This is anti-abuse protection, not marketing. It's what keeps bots from draining a free "
+        f"tool that isn't free to run. It also delivers your report and scopes your private review "
+        f"link. Verified once, skipped for the next {_DEVICE_COOKIE_DAYS} days."
+    )
+    return _verification_page(
+        "Verify your email", "A one-time anti-bot verification to prevent abuse.", body, error, footnote
+    )
 
 
 def _render_code_step(url: str, email: str, error: str | None = None) -> str:
@@ -636,27 +954,41 @@ _STATUS_PAGE = """<!DOCTYPE html>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Scanning | MAD Platform</title>
 __FONT_LINK__
-<style>__STYLE__</style>
+__STYLE_LINK__
 </head>
 <body>
+<a class="skip-link" href="#main">Skip to main content</a>
 <div class="scan-beam" id="scan-beam" aria-hidden="true" style="display:none"></div>
-<div class="page">
-  <div class="brand"><a href="/" style="color:inherit;text-decoration:none">{theme.BRAND_MARK}MAD Platform</a></div>
+<main id="main" class="page">
+  <div class="brand"><a href="/" style="color:inherit;text-decoration:none">__BRAND_MARK__MAD Platform</a></div>
   <h1 id="heading">__URL__</h1>
-  <div class="tagline" id="tagline">This runs the real pipeline: page selection, parallel analysis, independent verification, ranking, ticket filing.</div>
+  <div class="tagline" id="tagline">This runs the real pipeline: page selection, parallel analysis, independent verification, ranking, exporting fixes.</div>
   <div class="error-box" id="slow-warning" style="display:none;margin-bottom:16px">
     This is taking longer than usual (4+ minutes). Most scans finish in 2-3 minutes -- the
     site may be unusually heavy, or something may need attention. Feel free to keep
     waiting, or come back and check this page later.
   </div>
-  <div class="card glass-sheen" id="content">
+  <!-- role="status" + aria-live="polite": this element's innerHTML is
+       rewritten on every poll, and without a live region a screen-reader
+       user got no announcement at all as the scan progressed or finished.
+       The page simply went quiet and changed underneath them, on the one
+       screen whose entire purpose is reporting progress. "polite" rather
+       than "assertive" because a scan update should queue behind whatever
+       the user is doing, not interrupt it. -->
+  <div class="card glass-sheen" id="content" role="status" aria-live="polite">
     <span class="spinner"></span> Starting...
   </div>
-</div>
+</main>
 <script>
 const jobId = __JOB_ID__;
-const SEV_ORDER = ["critical", "high", "medium", "low"];
-const SEV_VAR = {critical: "var(--crit)", high: "var(--high)", medium: "var(--med)", low: "var(--low)"};
+// Injected from mad_platform/severity.py and theme.SEVERITY_VAR rather
+// than retyped here. This was the fifth independent copy of the severity
+// vocabulary, and the one furthest from the others -- a tier added in
+// Python would have rendered in the report and silently vanished from this
+// page's donut, whose ring total would then disagree with the
+// total_findings headline printed directly above it.
+const SEV_ORDER = __SEV_ORDER__;
+const SEV_VAR = __SEV_VAR__;
 const PRINCIPLE_ORDER = ["Perceivable", "Operable", "Understandable", "Robust"];
 
 function donutSvg(counts) {
@@ -710,7 +1042,7 @@ const PHASE_LABELS = {
   selecting_pages: "Deciding which pages matter most...",
   analyzing_pages: "Analyzing pages for accessibility issues...",
   ranking_findings: "Ranking findings by real-world risk...",
-  filing_tickets: "Filing tickets for confirmed findings...",
+  filing_tickets: "Exporting fixes for confirmed findings...",
   generating_report: "Generating your report...",
 };
 
@@ -776,17 +1108,29 @@ function renderInProgress(data) {
     (rows ? `<ul class="stage-list">${rows}</ul>` : "");
 }
 
+// Returns false (and renders nothing final) if the summary isn't there
+// yet, so the caller knows to keep polling. The server writes status and
+// summary in one atomic update now, so this should not happen for any job
+// completed by current code -- but jobs completed by the older two-write
+// path exist, and a renderer that throws on missing data is exactly what
+// turned that race into a permanently frozen page. Degrade, don't throw.
 function renderCompleted(data) {
+  const s = data.summary;
+  if (!s || !s.severity_counts) {
+    document.getElementById("content").innerHTML =
+      `<div style="display:flex;align-items:center;gap:10px"><span class="spinner"></span> ` +
+      `Scan complete -- loading your results...</div>`;
+    return false;
+  }
   document.getElementById("scan-beam").style.display = "none";
   finished = true;
-  const s = data.summary;
   document.getElementById("heading").textContent = "Scan complete";
   document.getElementById("tagline").textContent = data.url;
   // (textContent above is inherently safe -- only the innerHTML build below needs esc())
   const counts = s.severity_counts;
   const pCounts = s.principle_counts || {};
   document.getElementById("content").innerHTML = `
-    <div class="meta-line">${s.total_findings} confirmed finding(s) &middot; ${s.filed_count} ticket(s) filed &middot; ${s.escalated_count} awaiting your review</div>
+    <div class="meta-line">${s.total_findings} confirmed finding(s) &middot; ${s.filed_count} fix(es) exported &middot; ${s.escalated_count} awaiting your review</div>
     <div class="dash-row">
       <div class="dash-card"><div class="dc-title">Site score</div>
         <div class="dash-score">
@@ -801,7 +1145,11 @@ function renderCompleted(data) {
       <a class="btn" href="/report/${jobId}" target="_blank">View full report</a>
       <a class="btn ghost" href="/report/${jobId}?download=1">Download HTML</a>
       <a class="btn ghost" href="/">Scan another site</a>
-    </div>`;
+    </div>
+    <p style="margin:16px 0 0;font-size:12.5px;line-height:1.6;color:var(--muted)">If this
+      scan just saved you the cost of a demand letter, <a href="https://buymeacoffee.com/madplatform"
+      target="_blank" rel="noopener">a coffee helps keep it free</a> for the next business that needs it.</p>`;
+  return true;
 }
 
 function renderFailed(data) {
@@ -813,15 +1161,57 @@ function renderFailed(data) {
      <div class="actions"><a class="btn" href="/">Try again</a></div>`;
 }
 
+// A scan takes minutes; this page has to survive a bad couple of seconds
+// in the middle of it. Every previous exit from poll() was permanent --
+// `if (!res.ok) return;` ended polling forever on one transient 500, one
+// 429 or one cold-start blip, a network error rejected the fetch with no
+// catch at all, and a throw inside a renderer did the same. The user was
+// left on a frozen "Starting..." screen for a scan that was still running
+// or had already succeeded, with nothing on screen to say so. So: the
+// ONLY ways out of this loop now are a terminal state (completed with a
+// summary, or failed) and the retry ceiling below.
+const POLL_MS = 2000;
+const QUEUED_POLL_MS = 3000;
+const MAX_CONSECUTIVE_ERRORS = 15;  // ~2 minutes of backed-off retries before giving up
+let consecutiveErrors = 0;
+
+function renderPollError() {
+  document.getElementById("content").innerHTML =
+    `<div class="error-box">We lost contact with the server while checking on your scan. ` +
+    `The scan itself is still running -- reload this page to pick the status back up.</div>
+     <div class="actions"><a class="btn" href="">Reload</a></div>`;
+}
+
 async function poll() {
-  const res = await fetch(`/api/status/${jobId}`);
-  if (!res.ok) return;
-  const data = await res.json();
-  if (data.status === "completed") { renderCompleted(data); return; }
-  if (data.status === "failed") { renderFailed(data); return; }
-  if (data.status === "queued") { renderQueued(data); setTimeout(poll, 3000); return; }
-  renderInProgress(data);
-  setTimeout(poll, 2000);
+  let nextDelay = POLL_MS;
+  try {
+    const res = await fetch(`/api/status/${jobId}`);
+    if (!res.ok) throw new Error(`status ${res.status}`);
+    const data = await res.json();
+    consecutiveErrors = 0;
+    if (data.status === "completed") {
+      if (renderCompleted(data)) return;  // false = summary not written yet, keep polling
+    } else if (data.status === "failed") {
+      renderFailed(data);
+      return;
+    } else if (data.status === "queued") {
+      renderQueued(data);
+      nextDelay = QUEUED_POLL_MS;
+    } else {
+      renderInProgress(data);
+    }
+  } catch (err) {
+    consecutiveErrors += 1;
+    if (consecutiveErrors >= MAX_CONSECUTIVE_ERRORS) {
+      finished = true;
+      renderPollError();
+      return;
+    }
+    // Linear backoff, capped: brief blips recover in ~2s, a longer outage
+    // stops hammering an already-struggling server.
+    nextDelay = Math.min(POLL_MS * consecutiveErrors, 15000);
+  }
+  setTimeout(poll, nextDelay);
 }
 poll();
 </script>
@@ -838,22 +1228,23 @@ def _static_page(title: str, body_html: str, active: str = "") -> str:
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{title} | MAD Platform</title>
 {theme.FONT_LINK}
-<style>{_BASE_STYLE}</style>
+{_BASE_STYLE_LINK}
 </head>
 <body>
+{_SKIP_LINK}
 {_site_header(active)}
-<div class="page with-site-header">
+<main id="main" class="page with-site-header">
   <h1>{title}</h1>
   <div style="line-height:1.6">{body_html}</div>
-</div>
+</main>
 {_site_footer()}
 </body>
 </html>"""
 
 
 @app.get("/", response_class=HTMLResponse)
-async def form_page() -> str:
-    return _render_form()
+async def form_page(request: Request) -> str:
+    return _render_form(device_verified=bool(_verified_email(request)))
 
 
 @app.get("/terms", response_class=HTMLResponse)
@@ -875,11 +1266,11 @@ async def terms_page() -> str:
 
           <li><h3>Who operates this, and who doesn't</h3>
             <p>An independent, open-source project (AGPL-3.0 licensed), run by one person, not a
-            company. There is no corporate entity, no support team, and no legal department
-            behind these terms, only the person running it and the public code doing the work:
+            company: no support team, no legal department, just the person running it and the
+            public code doing the work:
             <a href="https://github.com/pandayv/mad-platform-community" target="_blank" rel="noopener">github.com/pandayv/mad-platform-community</a>.
-            That's also where to raise an issue or ask a question about how this operates,
-            or email <a href="mailto:hello@mad-platform.org">hello@mad-platform.org</a> directly.
+            That's also where to raise an issue or ask a question about how this operates, or
+            email <a href="mailto:hello@mad-platform.org">hello@mad-platform.org</a> directly.
             Nothing here is, or should be read as, the output of a company with legal counsel on
             staff.</p></li>
 
@@ -959,12 +1350,20 @@ async def privacy_page() -> str:
         findings. The IP address of each request is used briefly for rate limiting, the same
         reason any free public tool has to, to keep it usable and not overwhelmed.</p>
 
-        <p><strong>How long we keep it:</strong> this is enforced automatically by the database
-        itself (a Firestore TTL policy, for anyone checking), not just written here as a promise.
-        Verification codes are gone within about an hour of being issued, whether or not you used
-        them. Rate-limiting counters expire within a few days. The "remember this device" token
-        expires after 30 days, after which you'll verify again. None of this technical
-        bookkeeping needs any action from you. It deletes itself on schedule.</p>
+        <p><strong>How long we keep the technical bookkeeping:</strong> this is enforced
+        automatically by the database itself (a Firestore TTL policy, for anyone checking), not
+        just written here as a promise. Verification codes are gone within about an hour of being
+        issued, whether or not you used them. Rate-limiting counters expire within a few days. The
+        "remember this device" token expires after 30 days, after which you'll verify again. None
+        of this needs any action from you. It deletes itself on schedule.</p>
+
+        <p><strong>How long we keep your scan itself:</strong> a scan record (the URL you
+        submitted, the findings, and the email address the report went to) is kept so your report
+        link and your review link keep working when you come back to them, and so you can compare
+        a re-scan later. We keep these for up to 12 months and then remove them. That window is
+        longer than the bookkeeping above because the record is the thing you actually came here
+        for; if you'd rather it went sooner, just ask (see "Your control" below) and it's
+        deleted.</p>
 
         <p><strong>Where it lives:</strong> on Google Cloud infrastructure (Firestore and Cloud
         Storage), in a project separate from any other project the operator runs. Report emails
@@ -991,17 +1390,40 @@ async def faq_page() -> str:
     return _static_page(
         "Frequently Asked Questions",
         """
+        <p class="tagline" style="margin-top:0">The short version: MAD Platform finds and
+        explains accessibility problems in easy-to-understand language, and gives you a
+        recommended fix for each one. It doesn't touch your code, and it isn't a law firm. More
+        details below.</p>
+
         <div class="trust-section-label">What this is</div>
         <ol class="trust-list">
           <li><h3>What does this tool actually do?</h3>
             <p>It scans the pages on your site that carry the most real risk, checks them with
             both rule-based and AI-assisted review, independently confirms every finding before
             it's ever shown to you, and gives you a concrete fix for each one, plus a
-            downloadable, tracker-importable list you can hand straight to whoever fixes your
+            downloadable checklist you can hand straight to whoever fixes your
             site. "MAD" is short for Multi-Agent Defense Platform: one agent decides what to
             check, one finds issues, one independently confirms them, one takes action. Not a
             single model skimming your site once and guessing.</p></li>
 
+          <li><h3>What doesn't it do?</h3>
+            <p>It won't replace a full legal audit or genuine assistive-technology testing by a
+            real user. Some of what the standard asks for is a judgment call, not a strict
+            pass/fail, and no automated tool can fully substitute for that. What it does do is go
+            well beyond a typical scanner: it reviews actual screenshots and video content, not
+            just code, and every finding is independently verified before it ever reaches you. It
+            tells you exactly what to fix and how. It doesn't touch your code directly: that
+            would mean access to your site's actual codebase, which this tool deliberately never
+            asks for.</p></li>
+
+          <li><h3>Is this actually free? What's the catch?</h3>
+            <p>No catch, and there isn't a paid tier waiting behind a paywall. This is a
+            self-funded community project, not a lead-generation funnel in disguise. Nobody's
+            selling your contact info to an accessibility consultant after you scan.</p></li>
+        </ol>
+
+        <div class="trust-section-label">Why this exists</div>
+        <ol class="trust-list" style="counter-reset: trust-item 3">
           <li><h3>Why does this exist?</h3>
             <p>To make the internet a little more usable for everyone. This free tool exists so a
             small business finds out about an accessibility gap from a proactive scan, not a
@@ -1009,65 +1431,50 @@ async def faq_page() -> str:
             more page a screen-reader user, a keyboard-only user, or someone with low vision can
             actually get through.</p></li>
 
-          <li><h3>What doesn't it do?</h3>
-            <p>It doesn't replace a real accessibility audit or legal review, doesn't check
-            every possible WCAG criterion, and doesn't fix your site for you. It tells you what
-            to fix and how. That boundary is deliberate: a tool that only tells you what you
-            want to hear isn't actually protecting you.</p></li>
-
-          <li><h3>Can I really trust an automated tool with something this important?</h3>
-            <p>As much as any tool built by one person can promise: yes. A finding that doesn't
-            survive the independent check described above never reaches your report at all.
-            It's dropped, not shown to you as a maybe.</p></li>
-
-          <li><h3>I need real legal help, not just a scan.</h3>
-            <p>This tool will tell you the same thing: it can tell you what's wrong technically,
-            it can't tell you what your specific legal exposure is. Talk to a qualified
-            accessibility or ADA attorney for that. This scan is a useful first step toward that
-            conversation, not a substitute for it.</p></li>
-
           <li><h3>What is WCAG?</h3>
-            <p>The Web Content Accessibility Guidelines, the standard nearly every digital
-            accessibility law and lawsuit points back to. If your site doesn't meet it, that's
-            the gap that shows up in a demand letter. This tool checks your site against it, so
-            you find out from a scan instead.</p></li>
+            <p>Short for the Web Content Accessibility Guidelines: think of it as the building
+            code for websites, the same idea as a wheelchair ramp next to a curb, just for the
+            web. It's the standard nearly every digital accessibility law and lawsuit points back
+            to. If your site doesn't meet it, that's the gap that shows up in a demand letter.
+            This tool checks your site against it, so you find out from a scan instead.</p></li>
+
+          <li><h3>Does it work with WordPress, Shopify, Wix, or Squarespace?</h3>
+            <p>Yes. It scans your live site the same way a visitor's browser does, so it works
+            regardless of what platform built it, whether that's WordPress, Shopify, Wix,
+            Squarespace, or something custom.</p></li>
         </ol>
 
-        <div class="trust-section-label">How you can help</div>
+        <div class="trust-section-label">Trust &amp; privacy</div>
         <ol class="trust-list" style="counter-reset: trust-item 6">
-          <li><h3>This helped me. How can I support it?</h3>
-            <p>Three ways, no obligation attached, and none of them cost more than a minute:</p>
-            <ul style="margin:8px 0 0;padding-left:20px;line-height:1.9">
-              <li><a href="https://buymeacoffee.com/madplatform" target="_blank" rel="noopener">Chip in a few dollars</a>
-              if the scan saved you the cost of a manual audit.</li>
-              <li><a href="mailto:hello@mad-platform.org">Send a quick testimonial or bit of feedback</a>,
-              even a sentence. It's the main way to know this is actually helping.</li>
-              <li>Mention it to another small-business owner who might need it. Word of mouth
-              is this project's entire marketing budget.</li>
-            </ul></li>
-        </ol>
-
-        <div class="trust-section-label">Trust, privacy, and keeping this free from abuse</div>
-        <ol class="trust-list" style="counter-reset: trust-item 7">
-          <li><h3>Is this actually free? What's the catch?</h3>
-            <p>No catch, and there isn't a paid tier waiting behind a paywall. This is a
-            self-funded community project, not a lead-generation funnel in disguise. Nobody's
-            selling your contact info to an accessibility consultant after you scan.</p></li>
+          <li><h3>Can I really trust an automated tool with something this important?</h3>
+            <p>Yes. Here's why: every finding goes through an independent verification step
+            before it's ever shown to you, and anything that doesn't hold up gets dropped, not
+            left in as a maybe. The rules themselves are checked against the real accessibility
+            standard, not an AI's unaided memory of it, so it can't misquote a rule or make one
+            up. And since this is open source, you don't have to take any of that on faith. You
+            can read exactly how it works.</p></li>
 
           <li><h3>Why do you need my email, and why a verification code?</h3>
-            <p>The main reason first: a verified email is what keeps this a tool for real people
-            instead of something bots or spam scripts quietly drain for free, since a scan isn't
-            free to run on this end even when it's free to you. Anyone can type an address; a
-            code sent to that inbox is what actually proves someone's there to receive it, which
-            is why a fake or mistyped address never gets past this step. Two smaller reasons ride
-            along: it's how your report reaches you, and it scopes your private review link so
-            nobody else who uses this tool can see your findings. Verify once and this browser
-            remembers you for 30 days, so it's a one-time cost, not a recurring one. Full detail
-            in the <a href="/privacy">privacy policy</a>.</p></li>
+            <p>Mainly to keep this a tool for real people, not something bots quietly drain for
+            free. A scan costs real money to run even when it's free to you, and a code is what
+            proves an address is real, not just typed in. It also delivers your report and makes
+            sure only you can see your own findings, through a private link nobody else can
+            access. Verify once, and this browser remembers you for 30 days. Full detail in the
+            <a href="/privacy">privacy policy</a>.</p></li>
 
+          <li><h3>I need real legal help, not just a scan.</h3>
+            <p>Here's exactly where the line sits: this scan tells you what's technically wrong
+            and how severe it is. It can't tell you your specific legal exposure; that's what a
+            qualified accessibility or ADA attorney is for. What it gives you is the evidence to
+            walk into that conversation already prepared, not starting from zero.</p></li>
+        </ol>
+
+        <div class="trust-section-label">About the project</div>
+        <ol class="trust-list" style="counter-reset: trust-item 9">
           <li><h3>Who's actually behind this?</h3>
-            <p>One person, building this in the open, not a company. The code that runs this
-            exact site is public: <a href="https://github.com/pandayv/mad-platform-community" target="_blank" rel="noopener">github.com/pandayv/mad-platform-community</a>.
+            <p>An independent, open-source project, not a company; built and maintained in the
+            open by one person. The code running this exact site is public:
+            <a href="https://github.com/pandayv/mad-platform-community" target="_blank" rel="noopener">github.com/pandayv/mad-platform-community</a>.
             That's not a marketing claim. You can read exactly what it does with your URL and
             your email before you ever submit either, line by line.</p></li>
 
@@ -1075,6 +1482,18 @@ async def faq_page() -> str:
             <p>Email <a href="mailto:hello@mad-platform.org">hello@mad-platform.org</a>: questions,
             bug reports, deletion requests, or just feedback on whether this was useful. A real
             person reads it, not a ticket queue.</p></li>
+
+          <li><h3>How can I support this project?</h3>
+            <p>You can support the project and the community in one or more ways:</p>
+            <ul style="margin:8px 0 0;padding-left:20px;line-height:1.9">
+              <li><a href="https://github.com/pandayv/mad-platform-community" target="_blank" rel="noopener">Contribute</a>
+              to the project on GitHub.</li>
+              <li><a href="mailto:hello@mad-platform.org">Provide a testimonial or feedback</a>,
+              even a sentence.</li>
+              <li>Spread the word: share it with friends, family, and on social media.</li>
+              <li><a href="https://buymeacoffee.com/madplatform" target="_blank" rel="noopener">Donate</a>
+              to help cover infrastructure costs.</li>
+            </ul></li>
         </ol>
         """,
         active="/faq",
@@ -1149,7 +1568,34 @@ async def _start_scan(request: Request, url: str, email: str) -> Response:
     if not allowed:
         return HTMLResponse(_render_form(error=reason), status_code=429)
     job_id = fs.create_job(url, owner_contact=email, status="queued")
-    _enqueue_scan(job_id)
+
+    # The enqueue is the one step here that can fail after quota has
+    # already been consumed and a job document already exists. It used to
+    # be a bare call: an IAM misconfiguration, a paused queue, a queue
+    # depth limit or a transient Cloud Tasks error gave the visitor a raw
+    # 500, kept their quota unit (the reservation is deliberately
+    # non-refundable by default), and left a `status: "queued"` job that no
+    # worker would ever pick up -- whose status page then told them "we'll
+    # email your full report as soon as it's ready", a promise nothing
+    # would keep.
+    try:
+        _enqueue_scan(job_id)
+    except gcloud_exceptions.AlreadyExists:
+        # The task name is the job_id, so this means this exact job is
+        # already queued. That is success, not failure -- the dedup guard
+        # doing its job.
+        logger.info("[%s] Task already queued -- treating as enqueued", job_id)
+    except Exception as exc:  # noqa: BLE001 - every failure mode here needs the same cleanup
+        logger.exception("[%s] Could not enqueue scan", job_id)
+        fs.fail_job(job_id, "We couldn't start this scan. Nothing was charged against your daily limit.")
+        fs.refund_scan_quota(email, client_ip)
+        return HTMLResponse(
+            _render_form(
+                error="We couldn't start your scan just now -- this is on our side, not yours. "
+                "Please try again in a few minutes; your daily scan allowance hasn't been used."
+            ),
+            status_code=503,
+        )
     return RedirectResponse(f"/status/{job_id}", status_code=303)
 
 
@@ -1255,9 +1701,18 @@ async def status_page(job_id: str) -> str:
     job = fs.get_job(job_id)
     if job is None:
         raise HTTPException(404, "No such job")
+    # _STATUS_PAGE is a plain string, not an f-string -- it can't be one,
+    # the page is mostly JavaScript full of literal { } and ${...}. So
+    # every interpolation into it has to be a __PLACEHOLDER__ replace, and
+    # a stray f-string-style {theme.X} in that template renders to the
+    # visitor verbatim rather than raising (which is exactly what the brand
+    # mark did here).
     return (
-        _STATUS_PAGE.replace("__STYLE__", _BASE_STYLE)
+        _STATUS_PAGE.replace("__STYLE_LINK__", _BASE_STYLE_LINK)
         .replace("__FONT_LINK__", theme.FONT_LINK)
+        .replace("__BRAND_MARK__", theme.BRAND_MARK)
+        .replace("__SEV_ORDER__", json.dumps(list(SEVERITY_ORDER)))
+        .replace("__SEV_VAR__", json.dumps(theme.SEVERITY_VAR))
         .replace("__URL__", html.escape(job["url"]))
         .replace("__JOB_ID__", f'"{job_id}"')
     )
@@ -1307,20 +1762,55 @@ async def get_tickets_csv(job_id: str) -> Response:
     )
 
 
+# Feedback input limits. Generous enough that nobody with something real to
+# say hits them, small enough that the endpoint is not a place to store
+# arbitrary content.
+_MIN_RATING = 1
+_MAX_RATING = 5
+_MAX_FEEDBACK_COMMENT = 2000
+_MAX_FEEDBACK_CONTACT = 254  # RFC 5321's maximum email address length
+
+
 @app.post("/report/{job_id}/feedback")
 async def submit_feedback(
     job_id: str,
+    token: str = Form(...),
     rating: int = Form(...),
     comment: str = Form(""),
     allow_testimonial: bool = Form(False),
-    contact: str = Form(""),
+    contact: str = Form("")
 ) -> JSONResponse:
     """The immediate "was this helpful" prompt shown on the report page and
     in the report email -- asking at the moment the report is delivered
     gets meaningfully better response rates than a delayed follow-up.
+
+    Authorized by the job's own review_token, the same capability that
+    already scopes /review/link/... to one scan's owner. This route
+    previously required only that the job exist, so anyone holding any
+    valid job ID could write unlimited Firestore documents with arbitrary
+    content, and `allow_testimonial` is caller-controlled -- so an attacker
+    could mark their own text publishable (app.py's privacy page says
+    testimonial-flagged feedback may be published). Firestore writes are
+    also billed.
+
+    Three further limits, none of which existed: `rating` was coerced to
+    int but never bounds-checked (a stored 2**40 skews anything that reads
+    it), `comment`/`contact` had no length cap, and one job could be
+    submitted against repeatedly.
     """
-    if fs.get_job(job_id) is None:
-        raise HTTPException(404, "No such job")
+    if not fs.verify_review_token(job_id, token):
+        # Same 404 for a missing job and a wrong token -- matching
+        # _scoped_escalation_or_404, so a guessed token cannot be used to
+        # confirm that a job ID is real.
+        raise HTTPException(404, "Not found")
+    if not _MIN_RATING <= rating <= _MAX_RATING:
+        raise HTTPException(422, f"rating must be between {_MIN_RATING} and {_MAX_RATING}")
+    if len(comment) > _MAX_FEEDBACK_COMMENT or len(contact) > _MAX_FEEDBACK_CONTACT:
+        raise HTTPException(422, "Feedback is too long")
+    if fs.has_feedback(job_id):
+        # Idempotent rather than an error: a double-submit from an impatient
+        # click should look like success to the person clicking.
+        return JSONResponse({"ok": True, "already_submitted": True})
     fs.save_feedback(job_id, rating=rating, comment=comment, allow_testimonial=allow_testimonial, contact=contact or None)
     return JSONResponse({"ok": True})
 
@@ -1358,10 +1848,11 @@ def _render_review_login(error: str | None = None) -> str:
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Internal Review | MAD Platform</title>
 {theme.FONT_LINK}
-<style>{_BASE_STYLE}</style>
+{_BASE_STYLE_LINK}
 </head>
 <body>
-<div class="page">
+{_SKIP_LINK}
+<main id="main" class="page">
   <div class="brand">{theme.BRAND_MARK}MAD Platform</div>
   <h1>Internal review queue</h1>
   <div class="tagline">Not for customer access. Authorized reviewers only.</div>
@@ -1373,22 +1864,19 @@ def _render_review_login(error: str | None = None) -> str:
     </form>
     {error_html}
   </div>
-</div>
+</main>
 </body>
 </html>"""
 
 
+# The "kb_version_change" branches that used to sit in this renderer, in
+# _render_review_detail and in review_resolve are gone: nothing has created
+# an escalation of that kind since the WCAG refresh stopped waiting on a
+# human gate (DECISIONS_LOG.md). Leaving them in described a workflow the
+# system no longer has.
 def _review_item_row(e: dict) -> str:
     eid = html.escape(e["id"])
     kind = e.get("kind")
-    if kind == "kb_version_change":
-        return (
-            f'<tr><td><span class="badge sev-low">KB version</span></td>'
-            f"<td>WCAG {html.escape(str(e.get('old_version')))} → {html.escape(str(e.get('new_version')))}, "
-            f"classified {html.escape(str(e.get('change_type')))}</td>"
-            f'<td class="mono">{e.get("confidence", 0):.2f}</td>'
-            f'<td><a class="btn btn-secondary" href="/review/{eid}" style="padding:6px 14px;font-size:12.5px">Review →</a></td></tr>'
-        )
     if kind == "learned_pattern":
         return (
             f'<tr><td><span class="badge sev-low">Learned pattern</span></td>'
@@ -1421,15 +1909,16 @@ def _render_review_list(pending: list[dict]) -> str:
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Internal Review | MAD Platform</title>
 {theme.FONT_LINK}
-<style>{_BASE_STYLE}</style>
+{_BASE_STYLE_LINK}
 </head>
 <body>
-<div class="page wide">
+{_SKIP_LINK}
+<main id="main" class="page wide">
   <div class="brand">{theme.BRAND_MARK}MAD Platform</div>
   <h1>Internal review queue</h1>
   <div class="tagline">{len(pending)} item(s) awaiting disposition.</div>
   <div class="card glass-sheen">{items_html}</div>
-</div>
+</main>
 </body>
 </html>"""
 
@@ -1438,14 +1927,7 @@ def _render_review_detail(e: dict, message: str | None = None) -> str:
     eid = e["id"]
     message_html = f'<div class="success-box">{html.escape(message)}</div>' if message else ""
 
-    if e.get("kind") == "kb_version_change":
-        body = f"""
-          <div class="field"><b>WCAG version change</b> <span class="badge sev-low">KB version</span></div>
-          <div class="field">{html.escape(str(e.get('old_version')))} → {html.escape(str(e.get('new_version')))}</div>
-          <div class="field">Classified: {html.escape(str(e.get('change_type')))} (confidence {e.get('confidence', 0):.2f})</div>
-          <div class="field">{html.escape(str(e.get('reasoning', '')))}</div>
-        """
-    elif e.get("kind") == "learned_pattern":
+    if e.get("kind") == "learned_pattern":
         samples = "".join(
             f'<div class="fix-cell" style="max-width:none;margin-bottom:6px">{html.escape(str(r))}</div>'
             for r in e.get("sample_rationales", [])
@@ -1496,10 +1978,11 @@ def _render_review_detail(e: dict, message: str | None = None) -> str:
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Internal Review | MAD Platform</title>
 {theme.FONT_LINK}
-<style>{_BASE_STYLE}</style>
+{_BASE_STYLE_LINK}
 </head>
 <body>
-<div class="page">
+{_SKIP_LINK}
+<main id="main" class="page">
   <div class="brand"><a href="/review" style="color:inherit;text-decoration:none">{theme.BRAND_MARK}MAD Platform · Review Queue</a></div>
   <h1>Review item</h1>
   <div class="card glass-sheen">
@@ -1507,7 +1990,7 @@ def _render_review_detail(e: dict, message: str | None = None) -> str:
     <div style="margin-top:20px">{actions}</div>
   </div>
   {message_html}
-</div>
+</main>
 </body>
 </html>"""
 
@@ -1521,10 +2004,27 @@ async def review_list(request: Request) -> Response:
 
 @app.post("/review/login")
 async def review_login(request: Request, code: str = Form(...)) -> Response:
-    if _REVIEW_CODE and code != _REVIEW_CODE:
+    review_code = config.review_code()
+    if not review_code:
+        # Fail closed, matching _is_reviewer: with no code configured there
+        # is no way to be authorized, so there is no way to log in either.
+        # (Previously `if _REVIEW_CODE and ...` let ANY submitted code
+        # through in this state and handed out a session cookie.)
+        logger.warning("Review login attempted while MAD_REVIEW_CODE is unset -- denying")
+        return HTMLResponse(
+            _render_review_login(error="The review queue is not configured on this deployment."),
+            status_code=403,
+        )
+    if not hmac.compare_digest(code, review_code):
         return HTMLResponse(_render_review_login(error="Wrong review code."), status_code=403)
     resp = RedirectResponse("/review", status_code=303)
-    resp.set_cookie(_REVIEW_COOKIE, _REVIEW_CODE or "", httponly=True, samesite="lax", secure=_is_https(request))
+    resp.set_cookie(
+        _REVIEW_COOKIE,
+        _review_session_value(review_code),
+        httponly=True,
+        samesite="lax",
+        secure=_is_https(request),
+    )
     return resp
 
 
@@ -1549,9 +2049,7 @@ async def review_resolve(escalation_id: str, request: Request, disposition: str 
         return HTMLResponse(_render_review_detail(escalation, message="Already resolved."))
 
     kind = escalation.get("kind")
-    if kind == "kb_version_change":
-        resolve_kb_escalation(escalation_id, disposition=disposition, reviewer="web-review")
-    elif kind == "learned_pattern":
+    if kind == "learned_pattern":
         resolve_pattern_escalation(escalation_id, disposition=disposition, reviewer="web-review")
     else:
         resolve_finding_escalation(_issue_sink(), escalation_id, disposition=disposition, reviewer="web-review")
@@ -1592,15 +2090,16 @@ def _render_scoped_review_list(job_id: str, token: str, pending: list[dict]) -> 
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Your Review Queue | MAD Platform</title>
 {theme.FONT_LINK}
-<style>{_BASE_STYLE}</style>
+{_BASE_STYLE_LINK}
 </head>
 <body>
-<div class="page wide">
+{_SKIP_LINK}
+<main id="main" class="page wide">
   <div class="brand">{theme.BRAND_MARK}MAD Platform</div>
   <h1>Your review queue</h1>
   <div class="tagline">Findings from your scan that need a quick judgment call -- only you can see this.</div>
   <div class="card glass-sheen">{items_html}</div>
-</div>
+</main>
 </body>
 </html>"""
 
@@ -1623,9 +2122,9 @@ def _render_scoped_review_detail(job_id: str, token: str, e: dict, message: str 
     else:
         actions = f"""
           <div class="tagline" style="margin:0 0 12px">
-            <b>Confirm</b> if this is a real problem on your site &mdash; it gets added to your ticket
+            <b>Confirm</b> if this is a real problem on your site: it gets added to your ticket
             list so it actually gets fixed. <b>Dismiss</b> if it isn't (a false positive, or something
-            you've decided not to address) &mdash; no ticket is created for it.
+            you've decided not to address); no ticket gets created for it.
           </div>
           <form action="/review/link/{job_id}/{token}/{eid}/resolve" method="post" style="display:inline-block;margin-right:10px">
             <button type="submit" name="disposition" value="confirm">Confirm</button>
@@ -1641,10 +2140,11 @@ def _render_scoped_review_detail(job_id: str, token: str, e: dict, message: str 
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Your Review Queue | MAD Platform</title>
 {theme.FONT_LINK}
-<style>{_BASE_STYLE}</style>
+{_BASE_STYLE_LINK}
 </head>
 <body>
-<div class="page">
+{_SKIP_LINK}
+<main id="main" class="page">
   <div class="brand"><a href="/review/link/{job_id}/{token}" style="color:inherit;text-decoration:none">{theme.BRAND_MARK}MAD Platform · Your Review Queue</a></div>
   <h1>Review item</h1>
   <div class="card glass-sheen">
@@ -1652,7 +2152,7 @@ def _render_scoped_review_detail(job_id: str, token: str, e: dict, message: str 
     <div style="margin-top:20px">{actions}</div>
   </div>
   {message_html}
-</div>
+</main>
 </body>
 </html>"""
 

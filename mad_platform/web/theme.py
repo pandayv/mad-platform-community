@@ -15,6 +15,8 @@ from __future__ import annotations
 import html as html_lib
 import math
 
+from mad_platform.severity import SEVERITY_ORDER
+
 FONT_LINK = (
     '<link rel="preconnect" href="https://fonts.googleapis.com">'
     '<link href="https://fonts.googleapis.com/css2?family=Newsreader:ital,opsz,wght@0,6..72,500;0,6..72,600;'
@@ -22,24 +24,42 @@ FONT_LINK = (
     '1,400&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">'
 )
 
-# Layered-passes mark: three offset, rotated bars at varying opacity --
-# stands in for scanning across multiple dimensions (visual, structural,
-# captions), not literal scanning iconography. Checked against the
-# accessibility/security-tool space specifically (no conflict found); the
-# one cultural association worth knowing (Adidas's three-stripes mark) is
-# apparel-only in every documented dispute, and these bars are offset/
-# rotated rather than parallel stripes anyway. Replaces the plain
-# placeholder dot everywhere the wordmark appears (header, footer-adjacent
-# brand rows, report page, the scan-bar's leading icon). currentColor so
-# it inherits whatever ink/brand color the surrounding element already
-# uses, light or dark theme, no separate color wiring per call site --
-# fill-opacity (not a separate currentColor tint) is what creates the
-# layered-depth look while staying a single inherited color.
+# Four-bar mark: four equal-height columns, one hue family stepping light
+# to dark left to right -- four agents (crawl/analyze/verify/act), not a
+# repeated single shape. Second version of this mark; the first (three
+# horizontal bars, one color at varying opacity) turned out to closely
+# resemble Ericsson's "three sausages" mark once actually rendered and
+# compared side by side rather than just reasoned about -- the earlier
+# comment here claimed a check "against the accessibility/security-tool
+# space" had cleared it, which shows the failure mode: checking only
+# adjacent industries misses a famous mark from a completely unrelated
+# one. This version was checked directly against Ericsson, Cisco,
+# McDonald's, Marriott, SoundCloud, Microsoft, Slack, and Tableau by
+# rendering each at matched scale next to this mark -- no resemblance
+# found. Four discrete vertical bars in one hue's tints is a different
+# composition from all of them (Ericsson: three horizontal, one color;
+# Cisco/SoundCloud: many thin bars of varying height, a skyline/soundwave
+# silhouette; McDonald's/Marriott: two continuous connected strokes
+# forming a literal M, not discrete bars at all; Slack: four bars in four
+# unrelated saturated hues arranged in a radial pinwheel, not a row;
+# Tableau: a grid of plus-signs).
+#
+# Needs its own four CSS custom properties (--brand-mark-2/3/4 above,
+# --brand for the first bar) rather than a single inherited currentColor
+# -- that's the one real cost of four distinct tints over one repeated
+# color. Safe wherever this renders inside the app's own <style> block
+# (every web page, and the stored/downloadable report, which embeds
+# THEME_CSS directly) since the custom properties resolve there; NOT used
+# anywhere in the raw email body, which is the one HTML context in this
+# codebase that can't be trusted to keep a <style> block (see
+# reporter._EMAIL_SEVERITY_COLOR's comment for why that one place is
+# hardcoded hex instead).
 BRAND_MARK = (
     '<svg class="brand-mark" viewBox="0 0 40 40" fill="none" aria-hidden="true">'
-    '<rect x="7" y="17" width="26" height="6" rx="3" fill="currentColor" fill-opacity="0.35"/>'
-    '<rect x="10" y="10" width="26" height="6" rx="3" fill="currentColor" fill-opacity="0.65" transform="rotate(-4 23 13)"/>'
-    '<rect x="6" y="24" width="26" height="6" rx="3" fill="currentColor" transform="rotate(3 19 27)"/>'
+    '<rect x="6" y="6" width="6" height="28" rx="3" fill="var(--brand)"/>'
+    '<rect x="14" y="6" width="6" height="28" rx="3" fill="var(--brand-mark-2)"/>'
+    '<rect x="22" y="6" width="6" height="28" rx="3" fill="var(--brand-mark-3)"/>'
+    '<rect x="30" y="6" width="6" height="28" rx="3" fill="var(--brand-mark-4)"/>'
     "</svg>"
 )
 
@@ -48,6 +68,10 @@ THEME_CSS = """
   --ink: #12181A; --ink-soft: #3C4A49; --muted: #5B6B6A;
   --bg: #EDF2F1; --surface: #FFFFFF; --surface-alt: #E3ECE9; --border: #CBDAD6;
   --brand: #0B6E66; --brand-dark: #084F49; --brand-tint: #E1F0EE; --focus: #0B6E66;
+  /* The brand mark's other three bars -- see BRAND_MARK below. One hue
+     family stepping light to dark, not four unrelated colors, so it
+     reads as "one brand, four parts" rather than a rainbow. */
+  --brand-mark-2: #2E9187; --brand-mark-3: #5CB3A8; --brand-mark-4: #8ECFC5;
   --crit: #C0152B; --crit-tint: #FDECEC;
   --high: #C2570A; --high-tint: #FDF1E6;
   --med:  #A67C00; --med-tint:  #FBF3DA;
@@ -55,6 +79,12 @@ THEME_CSS = """
   --ok:   #157A4F; --ok-tint:   #E4F5EC;
   --border-strong: #9FB6B1;
   --shadow: 0 1px 2px rgba(18,24,26,0.06), 0 8px 24px rgba(18,24,26,0.05);
+  /* The hero scan pill's width, and the .scan-section wrapper that has to
+     line up with it. Both hardcoded 480px before, so changing one silently
+     broke the alignment -- and the comment above .scan-bar treats 480 as a
+     deliberate, argued-over number, which is exactly the kind of value
+     that must not exist twice. */
+  --scan-bar-max: 480px;
   /* liquid-glass surface tokens: translucent panels over an ambient gradient,
      not flat opaque cards -- see body's background-image below for the field
      these surfaces actually refract. */
@@ -79,6 +109,7 @@ THEME_CSS = """
     --ink: #EAF1EF; --ink-soft: #C7D6D3; --muted: #93A6A3;
     --bg: #0E1413; --surface: #161F1E; --surface-alt: #1D2827; --border: #2B3937;
     --brand: #3FBFAF; --brand-dark: #7FDCCF; --brand-tint: #16302C; --focus: #3FBFAF;
+    --brand-mark-2: #5CCBBD; --brand-mark-3: #82D8CC; --brand-mark-4: #AAE6DC;
     --crit: #F2586A; --crit-tint: #3A1518;
     --high: #F0954C; --high-tint: #3A2412;
     --med:  #E3BE3D; --med-tint:  #362B0C;
@@ -106,10 +137,14 @@ THEME_CSS = """
    regardless of what causes the next one. Intentionally on html, not
    body -- the specific bug this fixed showed document.documentElement's
    own scrollWidth/scrollX diverging from body's, so the guard needs to
-   sit at the same level as the part that was actually scrollable. */
+   sit at the same level as the part that was actually scrollable.
+   Don't add it to body too "for safety" -- overflow-x:hidden on both
+   html and body at once silently breaks the sticky header (Chromium
+   stops tracking the viewport for position:sticky descendants), even
+   though overflow-x:hidden on just one of them fully blocks horizontal
+   scroll on its own. Confirmed via Playwright: verified in isolation. */
 html { overflow-x: hidden; }
 body {
-  overflow-x: hidden;
   margin: 0; color: var(--ink); min-height: 100vh;
   background: var(--ambient), var(--bg);
   background-attachment: fixed;
@@ -159,6 +194,21 @@ a { color: var(--brand-dark); }
   position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden;
   clip: rect(0,0,0,0); white-space: nowrap; border: 0;
 }
+/* Skip link. Hidden until focused, then a normal visible control at the
+   top-left -- a keyboard or screen-reader user should not have to walk the
+   header on every page to reach the content, and there was no way to skip
+   it at all. WCAG 2.4.1 (Bypass Blocks). Sits above .scan-beam's z-index:30
+   so it can't be covered by the sweep. */
+.skip-link {
+  position: absolute; left: -9999px; top: 0; z-index: 100;
+  background: var(--surface); color: var(--brand-dark); border: 2px solid var(--brand);
+  border-radius: 0 0 8px 0; padding: 12px 18px; font-weight: 700; text-decoration: none;
+}
+.skip-link:focus { left: 0; }
+/* The comparison table scrolls horizontally inside .compare-wrap; giving
+   that wrapper tabindex="0" is what lets a keyboard user scroll it at all,
+   and this makes the resulting focus visible rather than silent. */
+.compare-wrap:focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }
 
 /* One full-viewport "screen" per landing section, so a laptop-height window
    shows exactly one section at a time instead of two-and-a-half at once.
@@ -172,7 +222,36 @@ a { color: var(--brand-dark); }
    usability regression, not a subtle one. min-height alone already gets
    the one-section-per-screen result; the snap was a flourish on top that
    cost more than it added. */
-.view { min-height: calc(100vh - 65px); display: flex; flex-direction: column; justify-content: center; }
+/* Only the hero still uses this now. It used to be shared by every major
+   section (hero, why-it-matters, how-it-works, under-the-hood, compare),
+   forcing each to fill the viewport regardless of how much content it
+   held -- short sections got centered inside a mostly-empty full-height
+   block, which read as a wall of dead space between sections and gave a
+   first-time visitor no hint anything followed the hero. Those four now
+   use plain .section and size to their own content; only the hero still
+   deliberately fills the screen (a landing page's opening moment earning
+   that space is a different case from a content section drowning in it),
+   which is also why the scroll-hint below only makes sense pinned to it. */
+.view { min-height: calc(100vh - 65px); display: flex; flex-direction: column; justify-content: center; position: relative; }
+/* Bottom-pinned regardless of hero content height (absolute within .view,
+   not part of the centered flex content) so it reads as "there's more
+   below" rather than just decorating the hero copy. A real link, not a
+   pure decoration -- keyboard/switch users get the same "jump to next
+   section" affordance a sighted visitor gets by scrolling past it. */
+.scroll-hint {
+  position: absolute; left: 50%; bottom: 28px; transform: translateX(-50%);
+  display: flex; align-items: center; justify-content: center;
+  width: 36px; height: 36px; border-radius: 50%; border: 1px solid var(--border);
+  color: var(--muted); text-decoration: none; animation: scroll-hint-bob 2.2s ease-in-out infinite;
+}
+.scroll-hint:hover { color: var(--brand-dark); border-color: var(--brand); }
+.scroll-hint svg { width: 16px; height: 16px; }
+@keyframes scroll-hint-bob {
+  0%, 100% { transform: translateX(-50%) translateY(0); }
+  50% { transform: translateX(-50%) translateY(6px); }
+}
+@media (prefers-reduced-motion: reduce) { .scroll-hint { animation: none; } }
+@media (max-width: 640px) { .scroll-hint { bottom: 14px; } }
 
 .page { max-width: 640px; margin: 0 auto; padding: 60px 24px; }
 .page.with-site-header { padding-top: 44px; }
@@ -181,6 +260,10 @@ a { color: var(--brand-dark); }
 h1 { font-family: "Newsreader", Georgia, serif; font-weight: 600; font-size: 32px; margin: 0 0 10px; letter-spacing: -0.01em; text-wrap: balance; word-break: break-word; }
 h2 { font-family: "Newsreader", Georgia, serif; font-weight: 600; font-size: 21px; margin: 0 0 10px; letter-spacing: -0.005em; }
 .tagline { color: var(--muted); font-size: 15px; margin-bottom: 32px; }
+/* Same "spacing separates it, not a border" treatment as the landing
+   page's .how-footnote -- explains the card above it without living
+   inside it. */
+.verify-footnote { margin: 20px 0 0; font-size: 12.5px; line-height: 1.6; color: var(--muted); }
 .card {
   background: var(--glass-strong); border: 1px solid var(--glass-border); border-radius: 18px;
   padding: 28px; box-shadow: var(--glass-shadow);
@@ -190,70 +273,141 @@ h2 { font-family: "Newsreader", Georgia, serif; font-weight: 600; font-size: 21p
 /* ---- site-wide header + footer, every page shell uses these ---- */
 .brand { font-size: 12px; letter-spacing: 0.09em; text-transform: uppercase; color: var(--brand-dark); font-weight: 800; display: flex; align-items: center; gap: 7px; }
 .brand .dot-b { width: 7px; height: 7px; border-radius: 50%; background: var(--brand); flex-shrink: 0; box-shadow: 0 0 0 3px var(--brand-tint); }
-.brand-mark { width: 19px; height: 19px; flex-shrink: 0; color: currentColor; vertical-align: -4px; }
+.brand-mark { width: 19px; height: 19px; flex-shrink: 0; vertical-align: -4px; }
 .site-header {
   position: sticky; top: 0; z-index: 40;
   border-bottom: 1px solid var(--glass-border); background: var(--glass-strong);
   backdrop-filter: blur(20px) saturate(160%); -webkit-backdrop-filter: blur(20px) saturate(160%);
 }
 .site-header-inner {
-  max-width: 900px; margin: 0 auto; padding: 18px 24px;
-  display: flex; align-items: center; justify-content: space-between; gap: 20px; flex-wrap: wrap;
+  max-width: 1080px; margin: 0 auto; padding: 18px 24px;
+  display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap;
 }
 .site-header-inner a.brand { text-decoration: none; }
+/* Marketing/content pages only (this selector only matches inside
+   .site-header-inner, so the review queue, report page, and status
+   pages keep their existing small quiet mark on purpose -- those were
+   deliberately left alone in an earlier pass, see _site_header()'s own
+   docstring). Bigger mark + normal-case wordmark reads as an actual
+   logo instead of a small uppercase label. */
+.site-header-inner .brand {
+  font-size: 21px; letter-spacing: -0.01em; text-transform: none; gap: 10px;
+}
+.site-header-inner .brand-mark { width: 28px; height: 28px; }
 .site-nav { display: flex; align-items: center; gap: 22px; list-style: none; margin: 0; padding: 0; }
 .site-nav a { color: var(--ink-soft); text-decoration: none; font-size: 13.5px; font-weight: 600; }
 .site-nav a:hover { color: var(--brand-dark); }
 .site-nav a.active { color: var(--brand-dark); }
-.site-nav a.cta { background: var(--brand); color: #fff; padding: 8px 16px; border-radius: 7px; }
-.site-nav a.cta:hover { opacity: 0.92; color: #fff; }
+.nav-toggle {
+  display: none; align-items: center; justify-content: center; flex-shrink: 0; order: 2;
+  width: 36px; height: 36px; border-radius: 8px; border: 1px solid var(--border);
+  background: var(--surface-alt); color: var(--ink); cursor: pointer; padding: 0;
+}
+.nav-toggle svg { width: 18px; height: 18px; }
+.nav-toggle .icon-close { display: none; }
+.nav-toggle[aria-expanded="true"] .icon-menu { display: none; }
+.nav-toggle[aria-expanded="true"] .icon-close { display: block; }
+/* Below this, the nav collapses behind .nav-toggle instead of wrapping to
+   a second header row -- the actual cause of an earlier mobile bug (see
+   _HEADER_NAV_LINKS's comment). .site-header-inner's own flex-wrap is what
+   .site-nav's order/flex-basis below hand it a full-width row to wrap
+   into, so no structural change is needed there, only these two rules. */
+@media (max-width: 859px) {
+  .nav-toggle { display: flex; }
+  .site-nav {
+    display: none; order: 3; flex-direction: column; align-items: stretch; gap: 2px;
+    flex-basis: 100%; margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--border);
+  }
+  .site-nav.is-open { display: flex; }
+  .site-nav a { padding: 9px 4px; }
+}
 .site-footer { border-top: 1px solid var(--border); margin-top: 64px; }
 .site-footer-inner {
-  max-width: 900px; margin: 0 auto; padding: 28px 24px 40px;
+  max-width: 1080px; margin: 0 auto; padding: 28px 24px 40px;
   display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap;
   font-size: 12.5px; color: var(--muted);
 }
 .site-footer nav { display: flex; gap: 18px; flex-wrap: wrap; }
 .site-footer a { color: var(--muted); text-decoration: none; }
 .site-footer a:hover { color: var(--brand-dark); }
+.site-footer a.support-link { display: inline-flex; align-items: center; gap: 5px; }
+.site-footer a.support-link svg { width: 13px; height: 13px; flex-shrink: 0; }
 
-/* ---- landing v4: one merged pill -- URL field and submit fused into a
-   single bar, closer to how a search engine's own home page reads, not
-   a labeled form. ---- */
-.hero-block { width: 100%; max-width: 640px; margin: 0 auto; padding: 24px 24px 40px; text-align: center; box-sizing: border-box; }
-.hero-title {
-  font-size: 52px; font-weight: 600; letter-spacing: -0.015em; margin: 0 0 14px;
-  text-wrap: balance;
+/* ---- split hero: copy column + an illustrative example-report visual,
+   grounded in two references (a dark-hero charity-auction template and a
+   split light/dark fintech template) that both use high contrast between
+   one light zone and one dark zone, a single accent color, and glass/depth
+   spent on exactly one element -- not smeared across the whole page as
+   background blobs. Went through ~10 rounds of mockup iteration before
+   landing here; see the artifact history if this ever needs revisiting. ---- */
+/* 900px to match .site-header-inner exactly -- the mockup used 1160px,
+   which read fine in isolation but put the hero out of step with the
+   header logo above it (and with .section's 980px below), a real
+   misalignment once seen on the actual page next to the real header. */
+.hero-outer { max-width: 1080px; margin: 0 auto; padding: 20px 24px 0; box-sizing: border-box; }
+.hero-grid { display: grid; grid-template-columns: 1.05fr 0.95fr; gap: 64px; align-items: stretch; }
+@media (max-width: 860px) { .hero-grid { grid-template-columns: 1fr; gap: 36px; } }
+
+/* scroll-margin-top (not on .scan-section, where it used to live): the
+   #scan anchor moved to this whole column, not just the form -- anchoring
+   scroll to the form alone left the headline/eyebrow above it scrolled
+   off-screen (they're earlier siblings in the same flex column), landing
+   a cross-page "Scan a site" click on a bare form with no context and a
+   large dead gap below it (the hero .view section's own min-height
+   padding, with nothing left to fill it once scrolled past the headline).
+   Anchoring to the column's top shows the full hero, scan bar included. */
+.hero-copy { display: flex; flex-direction: column; justify-content: center; align-items: flex-start; height: 100%; scroll-margin-top: 90px; }
+
+/* Text-first badge, not the mono/uppercase label treatment used for
+   in-page eyebrows elsewhere -- this one only ever holds "Community
+   Edition", so it reads as a small status pill, not a data label. */
+.hero-eyebrow {
+  display: inline-flex; align-items: center; gap: 7px; font-family: "Public Sans", sans-serif;
+  font-size: 12.5px; font-weight: 600; text-transform: none; letter-spacing: normal; color: var(--brand-dark);
+  background: var(--brand-tint); border: 1px solid var(--border); border-radius: 20px; padding: 6px 13px 6px 12px;
+  margin-bottom: 22px; max-width: 100%; backdrop-filter: none; -webkit-backdrop-filter: none;
 }
-.hero-title-mark { font-weight: 800; color: var(--brand-dark); }
-.hero-tagline { font-family: "Newsreader", Georgia, serif; font-weight: 500; font-size: 20px; color: var(--ink-soft); margin: 0; }
+.hero-eyebrow-text { min-width: 0; white-space: normal; }
+.hero-eyebrow .dot-b { width: 6px; height: 6px; box-shadow: 0 0 0 3px rgba(21,122,79,0.18); background: var(--ok); }
 
-/* scroll-margin-top so a browser jumping to #scan (the header's "Scan a
-   site" link, from another page) doesn't tuck it under the sticky header
-   -- covers the header at both its one-line (~65px) and wrapped-to-two-
-   lines (~95px, narrow phones) heights. */
-.scan-section { width: 100%; max-width: 640px; margin: 0 auto; padding: 0 24px 8px; scroll-margin-top: 90px; box-sizing: border-box; }
+/* Sans-serif here is a deliberate departure from the site's usual serif
+   h1/h2 (see the generic h1 rule up top) -- the mockup rounds converged on
+   a bold sans headline specifically for this hero, kept for just this one
+   element rather than changed sitewide. */
+.hero-title {
+  font-family: "Public Sans", sans-serif; font-size: 44px; line-height: 1.1; font-weight: 600;
+  letter-spacing: -0.015em; margin: 0 0 16px; text-wrap: balance;
+}
+/* var(--brand), not --brand-dark: --brand-dark is close enough to the
+   surrounding near-black ink that the "emphasis" barely registered as a
+   color change, just a bold-weight bump. --brand is lighter/more
+   saturated, so it actually reads as a distinct accent against the
+   headline's own color, not just a font-weight difference. */
+.hero-title strong { font-weight: 800; color: var(--brand); }
+.hero-tagline { font-family: "Public Sans", sans-serif; font-weight: 400; font-size: 17px; line-height: 1.6; color: var(--ink-soft); max-width: 46ch; margin: 0 0 26px; }
+
+.scan-section { width: 100%; max-width: var(--scan-bar-max); box-sizing: border-box; margin-bottom: 16px; }
 .scan-form { display: flex; flex-direction: column; gap: 12px; }
 
 /* Google-proportioned: a plain surface with a light shadow, not the
    heavier glass-blur treatment used elsewhere on the page -- narrower
-   (~620px) and crisper reads more "sleek" than a wider glass pill did in
-   side-by-side comparison, which settled what the width complaint was
-   actually about (proportions/surface, not raw pixels). The leading
-   brand mark (not a generic magnifying glass) is the one deliberately
-   colored element in an otherwise quiet bar. */
+   (~480px, was 620px) and crisper reads more "sleek" than a wider glass
+   pill did in side-by-side comparison, which settled what the width
+   complaint was actually about (proportions/surface, not raw pixels).
+   The leading brand mark (not a generic magnifying glass) is the one
+   deliberately colored element in an otherwise quiet bar. */
 .scan-bar {
-  width: 100%; max-width: 620px; margin: 0 auto; display: flex; align-items: center; gap: 4px; box-sizing: border-box;
+  width: 100%; max-width: var(--scan-bar-max); display: flex; align-items: center; gap: 4px; box-sizing: border-box;
   border: 1px solid var(--border); background: var(--surface);
-  border-radius: 999px; padding: 4px 6px 4px 22px;
+  border-radius: 999px; padding: 4px 6px 4px 18px;
   box-shadow: var(--shadow);
   transition: border-color 0.15s ease, box-shadow 0.15s ease;
 }
 .scan-bar:focus-within { border-color: var(--brand); box-shadow: 0 0 0 3px var(--brand-tint), var(--shadow); }
-.scan-bar .brand-mark { color: var(--brand); width: 18px; height: 18px; }
+.scan-bar .brand-mark { width: 18px; height: 18px; }
 .scan-bar input {
   flex: 1; min-width: 0; border: none; background: none; outline: none;
-  padding: 15px 12px; font-size: 16px; font-family: inherit; color: var(--ink);
+  padding: 14px 10px; font-size: 15.5px; font-family: inherit; color: var(--ink);
 }
 .scan-bar input::placeholder { color: var(--muted); }
 /* height + padding:0 (not the base button's vertical padding) is the
@@ -263,8 +417,19 @@ h2 { font-family: "Newsreader", Georgia, serif; font-weight: 600; font-size: 21p
    a few pixels of misalignment. Matching them to the same explicit
    height removes that regardless of either element's own font metrics. */
 .scan-bar .scan-submit {
-  flex-shrink: 0; height: 48px; border-radius: 999px !important; padding: 0 25px !important; margin: 0;
-  font-size: 14.5px;
+  flex-shrink: 0; height: 44px; border-radius: 999px !important; padding: 0 22px !important; margin: 0;
+  font-size: 14px;
+  /* Matching the heights above removes the FONT-METRIC source of
+     misalignment, but not all of it: the base .scan-submit rule sets
+     align-self: flex-end, which has lower specificity than this selector
+     yet was never overridden here -- so inside .scan-bar (display:flex;
+     align-items:center) the button's bottom edge aligned to the ~51px
+     input's rather than centering against it, sitting 3-4px low at every
+     width above 480px. A @media (max-width: 480px) rule already patched
+     it with `align-self: auto !important` for phones only, which is the
+     giveaway: the leak was noticed at one width and fixed there instead
+     of at its source. Fixed here, and that media-query patch is gone. */
+  align-self: center;
 }
 
 /* Every OTHER field in the funnel (email step, code step) keeps the
@@ -284,34 +449,162 @@ h2 { font-family: "Newsreader", Georgia, serif; font-weight: 600; font-size: 21p
   align-self: flex-end; justify-content: center; font-size: 14px;
   border-radius: 10px !important; padding: 10px 20px !important; margin-top: 2px;
 }
-@media (max-width: 640px) { .hero-title { font-size: 38px; } .scan-submit { align-self: stretch; } }
 @media (max-width: 480px) {
-  .scan-bar { flex-wrap: wrap; border-radius: 22px; padding: 16px 18px 16px 20px; }
-  .scan-bar input { flex-basis: 100%; padding: 2px 0 12px; }
-  .scan-bar .scan-submit { flex: 1; align-self: auto !important; }
+  .scan-bar { flex-wrap: wrap; border-radius: 22px; padding: 14px 16px; }
+  .scan-bar input { flex-basis: 100%; padding: 2px 0 10px; }
+  /* No align-self override needed any more -- .scan-bar .scan-submit sets
+     center for every width now, instead of this rule undoing a leak from
+     the base rule for phones only. */
+  .scan-bar .scan-submit { flex: 1; }
 }
 
-/* No border here on purpose: a 1px divider under mix-blend-mode:overlay
-   (the scan beam passes over this whole section) flares into a bright,
-   glitchy-looking line whenever the beam crosses it -- confirmed by
-   forcing the beam to that exact position. Whitespace alone (this much
-   margin+padding) still reads as a clear separation from the form above
-   without giving the beam anything to blow out. */
-.mad-lockup.centered { text-align: center; margin-top: 40px; padding-top: 24px; }
+/* Same anti-abuse fact as the "how it works" footnote and the email-step
+   page itself, just surfaced earlier -- at the actual point someone
+   decides to click Scan, not several sections below it, so the email
+   step (first-time visitors only) never lands as a surprise. */
+.scan-hint { display: flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--muted); margin: 10px 0 0; }
+.scan-hint svg { width: 14px; height: 14px; color: var(--ok); flex-shrink: 0; }
+/* The lightbulb (a heads-up, first-time visitors only) deliberately isn't
+   --ok green -- that color already means "verified/succeeded" for the
+   returning-visitor checkmark right above it in this same slot, and this
+   message is neither: it's a plain notice, not a success state. --brand
+   keeps it visually related (still an icon+text hint) without borrowing
+   a color that means something more specific elsewhere on the page. */
+.scan-hint-tip svg { color: var(--brand); }
+.trust-row { display: flex; flex-wrap: wrap; gap: 16px; font-size: 12.5px; color: var(--ink-soft); }
+.trust-row span { display: flex; align-items: center; gap: 6px; }
+.trust-row svg { width: 14px; height: 14px; color: var(--ok); flex-shrink: 0; }
 
-.section { max-width: 980px; margin: 0 auto; padding: 56px 24px; }
-.section-head { text-align: center; margin-bottom: 56px; }
-.section-head h2 { font-size: 30px; font-weight: 500; line-height: 1.3; margin-bottom: 8px; text-wrap: balance; }
-.section-head h2 em { font-style: italic; font-weight: 600; color: var(--brand-dark); }
-.section-head p { color: var(--muted); font-size: 14.5px; margin: 0; }
+/* The one glass/depth moment in the hero -- a fixed dark ground (not
+   theme-reactive, deliberately: it's a stand-in browser chrome, meant to
+   read the same regardless of the page's own light/dark mode) with a
+   single illustrative example report, not a real scan. brand-derived glow
+   colors, not a separate accent system. */
+.hero-visual-col { display: flex; flex-direction: column; gap: 12px; height: 100%; }
+.hero-visual {
+  position: relative; background: #12181A; border-radius: 24px; padding: 34px; min-height: 460px;
+  flex: 1; overflow: hidden; box-shadow: 0 20px 50px -25px rgba(9,30,28,0.45);
+  display: flex; align-items: center; justify-content: center;
+}
+.hero-visual::before {
+  content: ""; position: absolute; inset: 0; pointer-events: none;
+  background:
+    radial-gradient(600px 380px at 78% 12%, rgba(63,191,175,0.28), transparent 60%),
+    radial-gradient(500px 300px at 10% 90%, rgba(11,110,102,0.24), transparent 60%);
+}
+.hero-visual .grid-lines {
+  position: absolute; inset: 0;
+  background-image: linear-gradient(rgba(255,255,255,0.05) 1px,transparent 1px), linear-gradient(90deg,rgba(255,255,255,0.05) 1px,transparent 1px);
+  background-size: 34px 34px; mask-image: linear-gradient(180deg,rgba(0,0,0,0.9),transparent 75%);
+}
+.example-card {
+  position: relative; z-index: 2; width: 100%; max-width: 320px; margin: 0 auto;
+  background: rgba(255,255,255,0.07); border: 1px solid rgba(255,255,255,0.16); border-radius: 16px;
+  backdrop-filter: blur(6px); box-shadow: 0 30px 60px -30px rgba(0,0,0,0.6), inset 0 1px 0 rgba(255,255,255,0.12);
+  overflow: hidden; transform: rotate(-2deg);
+}
+.example-card .browser-bar { display: flex; align-items: center; gap: 6px; padding: 10px 14px; border-bottom: 1px solid rgba(255,255,255,0.1); }
+.example-card .browser-bar i { width: 8px; height: 8px; border-radius: 50%; background: rgba(255,255,255,0.25); }
+.example-card .browser-bar .url { margin-left: 10px; font-family: "JetBrains Mono", monospace; font-size: 10.5px; color: rgba(255,255,255,0.45); }
+.example-card .card-body { padding: 20px 18px; }
 
-/* Eyebrow-with-rule-line, replacing a plain section label where a section
-   gets the fuller title treatment (h2 mixing a plain weight with an
-   italic accent clause via the em rule above) -- the technique a flat
-   centered h2 alone couldn't deliver, independent of font size. */
-.rule-eyebrow { display: flex; align-items: center; gap: 10px; justify-content: center; margin-bottom: 14px; }
-.rule-eyebrow .line { width: 26px; height: 1px; background: var(--brand); opacity: 0.5; }
-.rule-eyebrow span { font-family: "JetBrains Mono", monospace; font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--brand-dark); font-weight: 700; }
+.example-score-row { display: flex; align-items: center; gap: 14px; padding-bottom: 16px; margin-bottom: 14px; border-bottom: 1px solid rgba(255,255,255,0.1); }
+.example-score-ring { position: relative; width: 58px; height: 58px; flex-shrink: 0; }
+.example-score-ring svg { width: 100%; height: 100%; }
+.example-score-ring .ring-bg { stroke: rgba(255,255,255,0.14); }
+.example-score-ring .ring-fg { stroke: #3FBFAF; }
+.example-score-num { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; font-family: "Newsreader", Georgia, serif; font-size: 17px; font-weight: 700; color: #fff; }
+.example-score-meta b { display: block; color: #fff; font-size: 13.5px; font-weight: 700; margin-bottom: 2px; }
+.example-score-meta span { display: block; color: rgba(255,255,255,0.5); font-size: 11.5px; }
+
+.example-sev-rows { display: flex; flex-direction: column; gap: 7px; }
+.example-sev-row { display: flex; align-items: center; gap: 9px; font-size: 12.5px; color: rgba(255,255,255,0.8); background: rgba(255,255,255,0.05); border-radius: 8px; padding: 8px 10px; }
+.example-sev-row .dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+.example-sev-row b { margin-left: auto; color: #fff; font-weight: 700; }
+
+/* color:#14171F, not var(--ink) -- this chip's background is the fixed
+   #fff a few lines up, on purpose (a floating callout that reads the same
+   over the dark hero regardless of page theme, same as the rest of this
+   block). var(--ink) flips to a near-white value in dark mode, which on
+   this always-white chip meant near-invisible text -- the one line in
+   this block that didn't match the "fixed, not theme-reactive" rule the
+   rest of it already follows. */
+.example-chip {
+  position: absolute; background: #fff; border-radius: 11px; padding: 9px 13px; font-size: 12px; font-weight: 600;
+  display: flex; align-items: center; gap: 7px; box-shadow: 0 16px 30px -14px rgba(0,0,0,0.45); z-index: 3; color: #14171F;
+}
+.example-chip svg { width: 14px; height: 14px; flex-shrink: 0; }
+.example-chip.ok svg { color: var(--ok); }
+.example-chip.warn svg { color: var(--crit); }
+.example-chip-1 { top: 24px; right: 22px; }
+.example-chip-2 { bottom: 38px; left: 18px; }
+
+/* The MAD acronym expansion -- settled placement after a few rounds of
+   trying it under the wordmark instead: caption under the hero image only,
+   sized up a step from a plain caption for some emphasis without a border
+   or its own section. No white-space:nowrap on purpose -- the column
+   narrows well below the text's natural width before the mobile
+   breakpoint kicks in, so nowrap would let it overflow past the image's
+   edge. Normal wrapping guarantees it never renders wider than the image:
+   one line at any width the site is likely to run at, two only in a
+   narrow in-between range. */
+.lockup-caption { margin: 0; text-align: center; font-size: 15.5px; font-weight: 500; color: var(--ink-soft); line-height: 1.4; }
+.lockup-caption .hl { color: var(--brand-dark); font-weight: 800; }
+
+@media (max-width: 640px) { .scan-submit { align-self: stretch; } }
+
+/* One pattern, every section below the hero, modeled on the eyebrow +
+   big-title + small-subtext composition (the epresence.ai-inspired
+   format from earlier): a small kicker word sits above a genuinely large,
+   bold title -- the title is the section's real name, sized to actually
+   dominate the eyebrow and the subtext both, not just nudged a step over
+   plain body text. Applies identically to every section now, not just one. */
+.section { max-width: 1080px; margin: 0 auto; padding: 56px 24px; scroll-margin-top: 90px; }
+.section-head { text-align: center; margin-bottom: 52px; }
+.section-eyebrow { display: flex; align-items: center; justify-content: center; gap: 12px; margin-bottom: 12px; }
+.section-eyebrow .line { width: 22px; height: 1px; background: var(--brand); opacity: 0.5; }
+.section-eyebrow span:not(.line) { font-family: "JetBrains Mono", monospace; font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--brand-dark); font-weight: 700; }
+.section-head h2 { font-size: 40px; font-weight: 700; line-height: 1.15; margin-bottom: 10px; text-wrap: balance; letter-spacing: -0.01em; }
+.section-head p { color: var(--muted); font-size: 15px; margin: 0; }
+.section-head p sup { color: var(--brand-dark); font-weight: 700; }
+@media (max-width: 640px) { .section-head h2 { font-size: 30px; } }
+
+/* "Why the report holds up": the real pipeline architecture (four
+   specialized agents, not one model doing everything), drawn as an
+   actual flow instead of a grid of description cards -- the diagram
+   itself is the "architectural decision" content, so it doesn't need to
+   be re-explained in paragraph form next to it. Captions stay to one
+   short line each; the mechanism, not marketing language. */
+.pipeline-flow { display: flex; align-items: flex-start; justify-content: center; }
+.pipeline-stage { flex: 1; max-width: 190px; display: flex; flex-direction: column; align-items: center; text-align: center; }
+.pipeline-badge {
+  width: 52px; height: 52px; border-radius: 50%; flex-shrink: 0; margin-bottom: 14px;
+  background: linear-gradient(160deg, color-mix(in srgb, var(--brand) 100%, white 25%), var(--brand-dark));
+  color: #fff; display: flex; align-items: center; justify-content: center;
+  box-shadow: 0 1px 0 rgba(255,255,255,0.4) inset, var(--shadow);
+}
+.pipeline-badge svg { width: 22px; height: 22px; }
+.pipeline-stage h3 { font-size: 15px; margin: 0 0 6px; font-weight: 700; }
+.pipeline-stage p { font-size: 12.5px; color: var(--ink-soft); margin: 0; line-height: 1.5; }
+.pipeline-arrow { flex: 0 1 60px; padding-top: 24px; color: var(--border-strong); display: flex; align-items: center; justify-content: center; }
+.pipeline-arrow svg { width: 22px; height: 14px; }
+@media (max-width: 760px) {
+  .pipeline-flow { flex-direction: column; align-items: stretch; gap: 4px; }
+  .pipeline-stage { flex-direction: row; max-width: none; text-align: left; gap: 14px; align-items: flex-start; }
+  .pipeline-badge { margin-bottom: 0; }
+  .pipeline-arrow { padding-top: 0; padding-left: 25px; }
+  .pipeline-arrow svg { width: 22px; height: 14px; transform: rotate(90deg); }
+}
+
+/* Supplementary architecture notes, deliberately smaller and quieter
+   than the pipeline above -- real system decisions (grounding, crash
+   recovery, ruleset currency) that matter but don't need equal visual
+   weight to the four-stage flow that's the section's actual centerpiece. */
+.arch-notes { display: flex; gap: 32px; justify-content: center; margin-top: 48px; flex-wrap: wrap; }
+.arch-note { display: flex; align-items: flex-start; gap: 10px; max-width: 300px; }
+.arch-note svg { width: 16px; height: 16px; color: var(--brand-dark); flex-shrink: 0; margin-top: 2px; }
+.arch-note b { display: block; font-size: 13px; }
+.arch-note span { display: block; font-size: 12px; color: var(--muted); margin-top: 1px; line-height: 1.4; }
 
 /* how it works: real screenshots, numbered */
 .how-visual { display: flex; align-items: flex-start; justify-content: center; gap: 56px; flex-wrap: wrap; }
@@ -321,7 +614,13 @@ h2 { font-family: "Newsreader", Georgia, serif; font-weight: 600; font-size: 21p
   box-shadow: var(--glass-shadow); margin-bottom: 16px;
   backdrop-filter: blur(28px) saturate(160%); -webkit-backdrop-filter: blur(28px) saturate(160%);
 }
-.how-step img { width: 100%; display: block; border-radius: 14px; padding: 4px; }
+/* Fixed aspect-ratio + object-fit is the actual fix, not just recropping
+   the two current screenshots to match by hand -- the two source images
+   naturally come from differently-shaped content (a tall stacked hero vs.
+   a wide dashboard), so anything that keeps matching them by manually
+   tuning crop dimensions will drift again the next time either gets
+   updated. This makes the two frames the same height unconditionally. */
+.how-step img { width: 100%; aspect-ratio: 5 / 4; object-fit: cover; object-position: top; display: block; border-radius: 14px; padding: 4px; }
 .how-step .step-badge {
   position: absolute; top: -14px; left: -14px; width: 34px; height: 34px; border-radius: 50%;
   background: linear-gradient(160deg, color-mix(in srgb, var(--brand) 100%, white 25%), var(--brand-dark));
@@ -330,6 +629,15 @@ h2 { font-family: "Newsreader", Georgia, serif; font-weight: 600; font-size: 21p
   box-shadow: 0 1px 0 rgba(255,255,255,0.4) inset, var(--shadow);
   z-index: 2;
 }
+/* A real footnote, not just another caption stacked under the images --
+   spacing alone is what separates it from the screenshots (matching
+   .compare-footnote's own treatment below), not a rule. A horizontal
+   line here read as a stray divider mid-scroll rather than a deliberate
+   section boundary -- the same reason .compare-footnote never had one. */
+.how-footnote {
+  margin: 36px 0 0; text-align: center; font-size: 12.5px; line-height: 1.6; color: var(--muted);
+}
+.how-footnote sup { color: var(--brand-dark); font-weight: 700; }
 .how-step h3 { font-size: 16px; margin: 0; }
 
 /* why it matters: charts presented as one integrated data strip, not
@@ -416,13 +724,37 @@ h2 { font-family: "Newsreader", Georgia, serif; font-weight: 600; font-size: 21p
    the whole page 150px wider than the viewport, confirmed live
    (window.scrollX could reach 151 on a 390px phone) -- the same flex-
    sizing bug class hit twice already tonight elsewhere on this page. */
-.compare-wrap { overflow-x: auto; min-width: 0; margin-bottom: 20px; }
+.compare-wrap { overflow-x: auto; min-width: 0; margin-bottom: 20px; position: relative; }
+/* Mobile-only scroll affordance: below the table's own 560px min-width,
+   the first render shows just the MAD column with no visual hint that the
+   other two are one swipe away -- a real usability bug on a phone, not
+   just a style nit. Text hint is the reliable part; the edge fade is a
+   soft visual echo of it, not load-bearing on its own. */
+.compare-hint {
+  display: none; font-family: "JetBrains Mono", monospace; font-size: 10.5px; text-transform: uppercase;
+  letter-spacing: 0.05em; color: var(--muted); text-align: center; margin: -8px 0 10px;
+}
+.compare-wrap::after {
+  content: ""; position: absolute; top: 0; right: 0; bottom: 0; width: 26px; pointer-events: none;
+  background: linear-gradient(90deg, transparent, var(--bg) 80%); opacity: 0;
+}
+@media (max-width: 640px) {
+  .compare-hint { display: block; }
+  .compare-wrap::after { opacity: 1; }
+}
 .compare-table { width: 100%; min-width: 560px; border-collapse: collapse; }
 .compare-table th, .compare-table td { padding: 14px 16px; border-bottom: 1px solid var(--glass-border); font-size: 14px; line-height: 1.4; vertical-align: middle; }
 .compare-table thead th { font-family: "Newsreader", Georgia, serif; font-weight: 600; font-size: 16px; text-align: center; padding-bottom: 4px; border-bottom: none; }
 .compare-table thead .col-sub { display: block; font-family: "JetBrains Mono", monospace; font-weight: 500; font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.03em; color: var(--muted); margin-top: 3px; }
 .compare-table thead tr:last-child th { padding-bottom: 14px; border-bottom: 1px solid var(--glass-border); }
-.compare-table td:first-child, .compare-table th:first-child {
+/* tbody-scoped on purpose: this styles the row-label column (e.g.
+   "Multi-page scan"). The unscoped version also matched thead's second
+   row, since that row has no leading empty cell and its MAD Platform
+   <th> became :first-child there by accident -- which is exactly why
+   "Free, always" was rendering left-aligned/mono while the "MAD
+   Platform" title one row up (which does sit behind a real leading
+   cell) rendered centered/serif correctly. */
+.compare-table tbody td:first-child, .compare-table tbody th:first-child {
   font-family: "JetBrains Mono", monospace; font-size: 11px; text-transform: uppercase;
   letter-spacing: 0.04em; color: var(--muted); font-weight: 600; text-align: left; white-space: nowrap; padding-right: 20px;
 }
@@ -442,59 +774,6 @@ h2 { font-family: "Newsreader", Georgia, serif; font-weight: 600; font-size: 21p
 }
 .compare-footnote sup { color: var(--brand-dark); font-weight: 700; }
 
-/* ---- landing hero ---- */
-.hero-band {
-  background:
-    radial-gradient(ellipse 900px 420px at 15% -10%, var(--brand-tint), transparent),
-    var(--bg);
-  border-bottom: 1px solid var(--border);
-  position: relative; overflow: hidden;
-}
-.hero-band::after {
-  /* the "scan line" -- a quiet nod to what the tool actually does, not decoration for its own sake */
-  content: ""; position: absolute; left: 0; right: 0; height: 2px;
-  background: linear-gradient(90deg, transparent, var(--brand), transparent);
-  animation: scan-sweep 5s ease-in-out infinite; opacity: 0.55;
-}
-@media (prefers-reduced-motion: reduce) { .hero-band::after { animation: none; top: 40%; } }
-@keyframes scan-sweep { 0%, 100% { top: 8%; } 50% { top: 92%; } }
-.hero-inner { max-width: 1080px; margin: 0 auto; padding: 56px 24px 48px; position: relative; }
-.hero-split { display: grid; grid-template-columns: 1.1fr 1fr; gap: 48px; align-items: center; }
-.hero-shot { position: relative; }
-.hero-shot img {
-  width: 100%; border-radius: 12px; border: 1px solid var(--border);
-  box-shadow: 0 20px 50px -12px rgba(11,110,102,0.28), var(--shadow);
-  transform: rotate(1.2deg);
-}
-.mad-lockup { font-size: 15px; color: var(--ink-soft); margin: -4px 0 24px; }
-.mad-lockup .hl { color: var(--brand-dark); font-weight: 800; }
-/* .sub used to be a separate block line ("caption" under the acronym
-   headline) -- deliberately merged inline now so the whole phrase reads
-   as one continuous line ("...Platform for digital accessibility
-   compliance") instead of an artificial headline/caption split that kept
-   reading as "stuck in two lines" no matter how the internal wrapping was
-   tuned. Muted color is the only remaining distinction. */
-.mad-lockup .sub { color: var(--muted); }
-@media (max-width: 860px) { .hero-split { grid-template-columns: 1fr; } .hero-shot img { transform: none; } }
-.hero-eyebrow {
-  display: inline-flex; align-items: center; gap: 6px; font-family: "JetBrains Mono", monospace;
-  font-size: 10px; letter-spacing: 0.05em; text-transform: uppercase; color: var(--brand-dark);
-  background: var(--glass); border: 1px solid var(--brand); border-radius: 999px; padding: 4px 11px 4px 9px;
-  margin-bottom: 16px; max-width: 100%;
-  backdrop-filter: blur(12px) saturate(150%); -webkit-backdrop-filter: blur(12px) saturate(150%);
-}
-.hero-eyebrow-text { min-width: 0; white-space: normal; }
-.hero-inner h1 { font-size: 40px; max-width: 18ch; margin-bottom: 16px; }
-.hero-lede { font-family: "Newsreader", Georgia, serif; font-style: italic; font-size: 19px; line-height: 1.55; color: var(--ink-soft); max-width: 58ch; margin-bottom: 0; }
-.stat-row { display: flex; gap: 28px; flex-wrap: wrap; margin-top: 32px; }
-.stat-row .stat b { display: block; font-family: "Newsreader", Georgia, serif; font-size: 26px; color: var(--brand-dark); line-height: 1; }
-.stat-row .stat span { font-size: 12px; color: var(--muted); }
-.how-row { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; margin: 40px 0 8px; }
-.how-card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 18px 20px; }
-.how-card .step-n { font-family: "JetBrains Mono", monospace; font-size: 11px; color: var(--brand-dark); font-weight: 700; margin-bottom: 8px; }
-.how-card h3 { font-size: 14.5px; margin: 0 0 6px; font-weight: 700; }
-.how-card p { font-size: 12.5px; color: var(--muted); margin: 0; line-height: 1.5; }
-
 /* ---- numbered trust/FAQ/terms lists ---- */
 .trust-list { list-style: none; counter-reset: trust-item; margin: 0; padding: 0; }
 .trust-list > li {
@@ -510,15 +789,28 @@ h2 { font-family: "Newsreader", Georgia, serif; font-weight: 600; font-size: 21p
 }
 .trust-list h3 { font-size: 15px; margin: 0 0 6px; font-weight: 700; }
 .trust-list p { margin: 0; color: var(--ink-soft); font-size: 14px; line-height: 1.6; }
+/* Bumped from 10.5px/--muted/400-weight: at that size and contrast these
+   read as decoration, not the section headers they actually are once the
+   FAQ was grouped into named categories a reader might scan for -- easy
+   to miss entirely next to 15px bold-black questions right below them.
+   Still monospace/uppercase (the same eyebrow treatment used elsewhere on
+   the site), just legible as a real label now: bigger, bolder, and
+   --brand-dark instead of --muted for real contrast against the page. */
 .trust-section-label {
-  font-family: "JetBrains Mono", monospace; font-size: 10.5px; text-transform: uppercase;
-  letter-spacing: 0.06em; color: var(--muted); margin: 34px 0 16px 44px;
+  font-family: "JetBrains Mono", monospace; font-size: 12px; font-weight: 700; text-transform: uppercase;
+  letter-spacing: 0.06em; color: var(--brand-dark); margin: 34px 0 16px 44px;
 }
 .trust-section-label:first-child { margin-top: 0; }
-@media (max-width: 680px) { .how-row { grid-template-columns: 1fr; } .hero-inner h1 { font-size: 32px; } }
 
 label.f-label { display: block; font-size: 11.5px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); font-weight: 700; margin-bottom: 6px; }
-input[type=url], input[type=password] {
+/* input[type=password] only. The selector used to lead with
+   input[type=url], which matched nothing: the URL field is deliberately
+   type="text" (see app._safe_url_or_error -- native type="url" validation
+   rejects the bare "cahm.org" most visitors actually type). A dead
+   selector reads as "this field is styled here" to the next person
+   changing it. The one field this really does style is the review
+   login's password box. */
+input[type=password] {
   width: 100%; padding: 12px 14px; font-size: 15px; border: 1px solid var(--border); background: var(--bg);
   color: var(--ink); border-radius: 8px; margin-bottom: 14px; font-family: inherit;
 }
@@ -618,8 +910,41 @@ footer.note { max-width: 900px; margin: 32px auto 0; padding: 0 24px 40px; color
 
 _PRINCIPLE_BY_DIGIT = {"1": "Perceivable", "2": "Operable", "3": "Understandable", "4": "Robust"}
 _PRINCIPLE_ORDER = ["Perceivable", "Operable", "Understandable", "Robust"]
-_SEVERITY_ORDER = ["critical", "high", "medium", "low"]
-SEVERITY_VAR = {"critical": "var(--crit)", "high": "var(--high)", "medium": "var(--med)", "low": "var(--low)"}
+
+# The severity vocabulary comes from mad_platform/severity.py, not a fourth
+# private list here -- see that module for what five independent copies of
+# these four words cost.
+_SEVERITY_ORDER = list(SEVERITY_ORDER)
+
+# Which palette token each severity renders in. One mapping, two forms:
+# SEVERITY_VAR below for anything the browser renders (it follows the
+# viewer's light/dark theme), and LIGHT_HEX for the two places a literal
+# value is genuinely required -- email bodies, where Gmail strips the
+# <style> block that would define the custom properties.
+SEVERITY_TOKEN = {"critical": "--crit", "high": "--high", "medium": "--med", "low": "--low"}
+SEVERITY_VAR = {sev: f"var({token})" for sev, token in SEVERITY_TOKEN.items()}
+
+# The light-mode value of each palette token, duplicated out of THEME_CSS
+# above because THEME_CSS is one opaque string and no email client can read
+# a custom property out of it.
+#
+# This duplication is deliberate and *tested*: tests/test_theme_palette.py
+# parses the :root block out of THEME_CSS and asserts every entry here
+# matches it. That is what makes this a mirror rather than a fifth
+# independent palette -- editing a token in the CSS without editing it here
+# fails a test instead of shipping two slightly different greens (which is
+# exactly what reporter.score_color had done: #15803D against --ok's
+# #157A4F).
+LIGHT_HEX = {
+    "--crit": "#C0152B",
+    "--high": "#C2570A",
+    "--med": "#A67C00",
+    "--low": "#47566B",
+    "--ok": "#157A4F",
+    "--brand": "#0B6E66",
+    "--ink": "#12181A",
+    "--muted": "#5B6B6A",
+}
 
 
 def wcag_principle(criterion: str) -> str:
@@ -660,7 +985,15 @@ def severity_donut_svg(counts: dict[str, int]) -> str:
             length = (count / total) * circumference
             parts.append(
                 f'<circle cx="48" cy="48" r="{r}" fill="none" stroke="{SEVERITY_VAR[sev]}" stroke-width="14" '
-                f'stroke-dasharray="{length:.2f} {circumference - length:.2f}" stroke-dashoffset="{-offset:.2f}"/>'
+                # `-offset if offset else 0.0`, not plain `-offset`: at
+                # offset 0 Python formats negative zero as "-0.00" while
+                # the status page's JavaScript emits "0.00". Both render
+                # identically, but tests/test_chart_parity.py diffs the two
+                # implementations character for character, and a parity
+                # check that has to tolerate differences stops catching the
+                # ones that matter.
+                f'stroke-dasharray="{length:.2f} {circumference - length:.2f}" '
+                f'stroke-dashoffset="{(-offset if offset else 0.0):.2f}"/>'
             )
             offset += length
         circles = "".join(parts)
