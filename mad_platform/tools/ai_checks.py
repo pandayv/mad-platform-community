@@ -18,6 +18,7 @@ from __future__ import annotations
 
 from pydantic import BaseModel
 
+from mad_platform.tools import untrusted
 from mad_platform.tools.adk_client import generate_structured
 from mad_platform.tools.crawler import PageSnapshot
 from mad_platform.tools.gemini_client import FLASH_LITE
@@ -34,7 +35,8 @@ class _AIFindingsResponse(BaseModel):
     findings: list[AIFinding]
 
 
-_VISUAL_PROMPT = """You are an accessibility analyst reviewing a screenshot of a
+_VISUAL_PROMPT = """{untrusted_preamble}
+You are an accessibility analyst reviewing a screenshot of a
 rendered webpage for WCAG issues that automated static analysis cannot
 catch from HTML alone. Look specifically for:
 - Alt text or link text that is technically present but not actually
@@ -57,7 +59,8 @@ be independently verified later, so a reasonable guess is fine.
 Page title: {title}
 """
 
-_SEMANTIC_PROMPT = """You are an accessibility analyst reviewing a webpage's
+_SEMANTIC_PROMPT = """{untrusted_preamble}
+You are an accessibility analyst reviewing a webpage's
 accessible-name content (alt text, aria-labels, link text) for whether it
 is genuinely descriptive, not just present. You are NOT checking whether
 these attributes exist -- that's already handled by a separate deterministic
@@ -86,7 +89,8 @@ Relevant HTML excerpt:
 {html_excerpt}
 """
 
-_MEDIA_PROMPT = """You are an accessibility analyst reviewing a webpage's HTML for
+_MEDIA_PROMPT = """{untrusted_preamble}
+You are an accessibility analyst reviewing a webpage's HTML for
 video and audio content that may not be accessible to Deaf and hard-of-hearing
 users (WCAG 1.2.1 Audio-only and Video-only, 1.2.2 Captions).
 
@@ -117,7 +121,12 @@ Relevant HTML excerpt:
 
 
 async def run_visual_check(snapshot: PageSnapshot) -> list[AIFinding]:
-    prompt = _VISUAL_PROMPT.format(title=snapshot.title)
+    # The page title is authored by the scanned site, so it is delimited
+    # like any other untrusted span even though it is one short line --
+    # a <title> is as good a place to hide an instruction as a div.
+    prompt = _VISUAL_PROMPT.format(
+        untrusted_preamble=untrusted.UNTRUSTED_PREAMBLE, title=untrusted.wrap(snapshot.title)
+    )
     result = await generate_structured(
         FLASH_LITE, prompt, _AIFindingsResponse, image_bytes=snapshot.screenshot_png
     )
@@ -125,16 +134,22 @@ async def run_visual_check(snapshot: PageSnapshot) -> list[AIFinding]:
 
 
 async def run_semantic_check(snapshot: PageSnapshot) -> list[AIFinding]:
-    # Keep the excerpt bounded -- full page HTML for a large page would be
-    # wasteful for a check that only cares about accessible-name content.
-    excerpt = snapshot.html[:8000]
-    prompt = _SEMANTIC_PROMPT.format(html_excerpt=excerpt)
+    # The excerpt is bounded (full page HTML for a large page would be
+    # wasteful for a check that only cares about accessible-name content),
+    # comment-stripped and delimited -- one shared helper, so the cap and
+    # the delimiters can't drift between the three call sites that use them.
+    prompt = _SEMANTIC_PROMPT.format(
+        untrusted_preamble=untrusted.UNTRUSTED_PREAMBLE,
+        html_excerpt=untrusted.page_excerpt(snapshot.html),
+    )
     result = await generate_structured(FLASH_LITE, prompt, _AIFindingsResponse)
     return result.findings
 
 
 async def run_media_check(snapshot: PageSnapshot) -> list[AIFinding]:
-    excerpt = snapshot.html[:8000]
-    prompt = _MEDIA_PROMPT.format(html_excerpt=excerpt)
+    prompt = _MEDIA_PROMPT.format(
+        untrusted_preamble=untrusted.UNTRUSTED_PREAMBLE,
+        html_excerpt=untrusted.page_excerpt(snapshot.html),
+    )
     result = await generate_structured(FLASH_LITE, prompt, _AIFindingsResponse)
     return result.findings

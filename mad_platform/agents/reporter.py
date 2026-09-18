@@ -19,13 +19,15 @@ from __future__ import annotations
 
 import html as html_lib
 import math
-import os
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
 from pydantic import BaseModel
 
+from mad_platform import config
 from mad_platform.agents.editor import VerifiedFinding
+from mad_platform.agents.llm_validation import validate_indexed
+from mad_platform.severity import SEVERITY_ORDER, Severity, count_by_severity, normalize
 from mad_platform.tools.adk_client import generate_structured
 from mad_platform.tools.gemini_client import FLASH, FLASH_LITE
 from mad_platform.web import theme
@@ -33,9 +35,11 @@ from mad_platform.web import theme
 # The report can be opened outside the app's own origin (downloaded, saved
 # locally, reopened later) so the live-status check below needs an
 # absolute URL, not a relative fetch that only works when served from
-# the app itself. No fallback default -- see orchestrator.py's own read
-# of this variable for why a stale hardcoded URL is worse than failing loudly.
-_APP_BASE_URL = os.environ["MAD_APP_BASE_URL"]
+# the app itself. config.app_base_url() has no fallback default -- see its
+# docstring for why a stale hardcoded URL is worse than failing loudly.
+# Read at call time rather than into a module constant at import time, so
+# importing this module (e.g. to test compute_score) needs no environment;
+# it still raises the same clear error the moment a link is actually built.
 
 
 @dataclass
@@ -45,12 +49,19 @@ class RankedFinding:
     editor_rationale: str
     editor_confidence: float
     risk_score: float  # 0-100, Reporter's judgment
-    severity: str  # "critical" | "high" | "medium" | "low"
+    # Always one of severity.SEVERITY_ORDER -- normalized in
+    # rank_and_recommend, so no consumer needs its own .lower() and none
+    # can be caught out by a "Critical" that misses a == "critical" gate.
+    severity: str
     suggested_fix: str
     risk_rationale: str
 
 
 _SCORE_WEIGHT = {"critical": 20.0, "high": 12.0, "medium": 6.0, "low": 2.0}
+# The weights are the one place a severity tier carries a number, so they
+# are also the place a tier added to the vocabulary and forgotten here
+# would silently take a default weight. Fail at import instead.
+assert set(_SCORE_WEIGHT) == set(SEVERITY_ORDER), "_SCORE_WEIGHT is out of sync with severity.SEVERITY_ORDER"
 
 
 def compute_score(ranked: list[RankedFinding]) -> int:
@@ -72,29 +83,67 @@ def compute_score(ranked: list[RankedFinding]) -> int:
     "perfect." A genuinely riddled site (dozens of findings across tiers)
     still drives the score to 0 -- sqrt keeps growing, just slower.
     """
-    counts: dict[str, int] = {}
-    for finding in ranked:
-        sev = finding.severity.lower()
-        counts[sev] = counts.get(sev, 0) + 1
-
-    penalty = sum(_SCORE_WEIGHT.get(sev, 4.0) * math.sqrt(n) for sev, n in counts.items())
+    counts = count_by_severity([f.severity for f in ranked])
+    penalty = sum(_SCORE_WEIGHT[sev] * math.sqrt(n) for sev, n in counts.items() if n)
     return max(0, min(100, round(100 - penalty)))
 
 
+# Score bands, defined once and consumed two ways. The dial on the web UI
+# and in the stored report wants a CSS custom property so it follows the
+# viewer's light/dark theme; the emailed summary wants a literal hex,
+# because Gmail strips <style> blocks and var(--ok) would resolve to
+# nothing there. Same three thresholds and the same three palette tokens
+# either way -- deriving both from this tuple is what stops them drifting.
+_SCORE_BANDS = ((80, "--ok"), (50, "--med"), (0, "--crit"))
+
+
+def _score_token(score: int) -> str:
+    for threshold, token in _SCORE_BANDS:
+        if score >= threshold:
+            return token
+    return "--crit"  # pragma: no cover - the last band's threshold is 0
+
+
 def score_color(score: int) -> str:
-    """Shared between the report template and the web UI so the same score
-    always reads as the same color in both places."""
-    if score >= 80:
-        return "#15803D"  # green
-    if score >= 50:
-        return "#A16207"  # amber
-    return "#B91C1C"  # red
+    """The score dial's color, as a CSS custom property.
+
+    Was a hardcoded #15803D / #A16207 / #B91C1C -- a fourth independent
+    copy of the severity palette, and one that matched none of the theme
+    tokens it was supposed to mirror (--ok is #157A4F, not #15803D). Worse
+    than the mismatch: a literal light-mode hex does not react to dark
+    mode, so the single largest number in the report rendered a dark green
+    on a near-black background. Both consumers inject this into a `style`
+    attribute, where a custom property resolves normally and picks up the
+    dark-mode redefinition for free.
+    """
+    return f"var({_score_token(score)})"
+
+
+def score_color_hex(score: int) -> str:
+    """The same score band as a literal light-mode hex, for email only.
+
+    Pulled from theme.LIGHT_HEX rather than written out again, so the two
+    forms of the same color cannot diverge the way score_color had.
+    """
+    return theme.LIGHT_HEX[_score_token(score)]
 
 
 class _Recommendation(BaseModel):
+    # Model-supplied, so untrusted until validate_indexed() has checked it
+    # against the list it is supposed to address -- see
+    # mad_platform/agents/llm_validation.py.
     finding_index: int
     risk_score: float
-    severity: str
+    # A Literal, not a str. As a plain str the prompt asked for one of four
+    # values and nothing enforced it, so a returned "Critical" or "severe"
+    # created a phantom counts key the donut ignored (ring total vs headline
+    # total disagreeing on one screen), took the silent fallback weight in
+    # compute_score, and walked straight past action_agent's case-sensitive
+    # `severity == "critical"` escalation gate -- auto-filing a critical
+    # finding with no human review, which is the one thing that gate exists
+    # to prevent. As a Literal the SDK constrains generation to these four
+    # strings and Pydantic rejects anything else at the boundary.
+    severity: Severity
     suggested_fix: str
     risk_rationale: str
 
@@ -158,6 +207,14 @@ async def rank_and_recommend(confirmed_by_page: dict[str, list[VerifiedFinding]]
     prompt = _REPORTER_PROMPT.format(findings_list=_format_findings(flat))
     result = await generate_structured(FLASH, prompt, _RecommendationResponse)
 
+    # Four subscripts of `flat` per recommendation below. Validate once
+    # here instead: an out-of-range index used to fail the whole scan with
+    # "list index out of range", and a negative one used to silently staple
+    # a fix onto the wrong finding.
+    recommendations = validate_indexed(
+        result.recommendations, len(flat), label="Reporter recommendations"
+    )
+
     ranked = [
         RankedFinding(
             page_url=flat[rec.finding_index][0],
@@ -165,11 +222,15 @@ async def rank_and_recommend(confirmed_by_page: dict[str, list[VerifiedFinding]]
             editor_rationale=flat[rec.finding_index][1].rationale,
             editor_confidence=flat[rec.finding_index][1].confidence,
             risk_score=rec.risk_score,
-            severity=rec.severity,
+            # Normalized once, here, where model output becomes a domain
+            # object -- rather than a .lower() at each of the five places
+            # that used to compare or count it (one of which, the escalation
+            # gate, didn't have one).
+            severity=normalize(rec.severity),
             suggested_fix=rec.suggested_fix,
             risk_rationale=rec.risk_rationale,
         )
-        for rec in result.recommendations
+        for rec in recommendations
     ]
     ranked.sort(key=lambda r: r.risk_score, reverse=True)
     return ranked
@@ -272,7 +333,8 @@ header .meta {{ color: var(--muted); font-size: 13.5px; margin-top: 4px; }}
 </style>
 </head>
 <body>
-<div class="page">
+<a class="skip-link" href="#main">Skip to main content</a>
+<main id="main" class="page">
   <header>
     <div>
       <a class="brand" href="{app_base_url}" style="text-decoration:none">{brand_mark}MAD Platform · Accessibility Report</a>
@@ -291,7 +353,7 @@ header .meta {{ color: var(--muted); font-size: 13.5px; margin-top: 4px; }}
 
   {findings_section}
 
-</div>
+</main>
 <footer class="note">
   MAD Platform is autonomous, AI-assisted WCAG accessibility scanning with independent
   verification before anything is reported. Findings are sorted by real-world risk,
@@ -362,16 +424,14 @@ async def draft_report(
     exec_summary = await generate_executive_summary(url, ranked)
     score = compute_score(ranked)
 
-    counts = {"critical": 0, "high": 0, "medium": 0, "low": 0}
-    for r in ranked:
-        counts[r.severity.lower()] = counts.get(r.severity.lower(), 0) + 1
+    counts = count_by_severity([r.severity for r in ranked])
     p_counts = theme.principle_counts([r.wcag_criterion for r in ranked])
 
     def _review_url(index: int) -> str | None:
         escalation_id = escalation_by_finding.get(index)
         if not (escalation_id and job_id and review_token):
             return None
-        return f"{_APP_BASE_URL}/review/link/{job_id}/{review_token}/{escalation_id}"
+        return f"{config.app_base_url()}/review/link/{job_id}/{review_token}/{escalation_id}"
 
     if not ranked:
         findings_section = '<div class="empty">No confirmed findings on the pages checked.</div>'
@@ -394,7 +454,7 @@ async def draft_report(
         score_dial=theme.score_dial(score, score_color(score)),
         dashboard_row=theme.dashboard_row(score, score_color(score), counts, p_counts),
         findings_section=findings_section,
-        app_base_url=_APP_BASE_URL,
+        app_base_url=config.app_base_url(),
         brand_mark=theme.BRAND_MARK,
     )
     return html, exec_summary, score, counts
@@ -402,15 +462,16 @@ async def draft_report(
 
 # Literal hex, not CSS custom properties -- email clients (Gmail especially)
 # strip <style> blocks from HTML pasted into a message body, so a value like
-# var(--crit) would resolve to nothing. These mirror theme.py's light-mode
-# palette (the only one that makes sense for email -- no reliable dark-mode
-# media query support across clients).
-_EMAIL_SEVERITY_COLOR = {
-    "critical": "#C0152B",
-    "high": "#C2570A",
-    "medium": "#A67C00",
-    "low": "#47566B",
-}
+# var(--crit) would resolve to nothing. Light-mode palette only; there is no
+# reliable dark-mode media query support across clients.
+#
+# The hex values are no longer retyped here: they are read out of
+# theme.LIGHT_HEX, which is the same table the CSS tokens come from. This
+# was the third independent copy of the palette, and copies drift -- see
+# score_color, which was the fourth and had gone a shade off on all three
+# values without anyone noticing.
+_EMAIL_SEVERITY_COLOR = {sev: theme.LIGHT_HEX[token] for sev, token in theme.SEVERITY_TOKEN.items()}
+assert set(_EMAIL_SEVERITY_COLOR) == set(SEVERITY_ORDER), "_EMAIL_SEVERITY_COLOR is out of sync with SEVERITY_ORDER"
 
 
 def draft_email_summary(
@@ -499,5 +560,10 @@ def draft_email_summary(
       </td>
     </tr>
   </table>
+
+  <p style="font-size:12px;color:#5B6B6A;line-height:1.6;margin:8px 0 0">This scan was generated
+    for free by MAD Platform, a self-funded, open-source project. If it saved you the cost of a
+    manual audit, you can <a href="https://buymeacoffee.com/madplatform" style="color:#0B6E66">buy
+    the project a coffee</a>.</p>
 </div>
 """

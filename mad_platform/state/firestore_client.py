@@ -12,32 +12,159 @@ doesn't have any of this project's data.
 
 from __future__ import annotations
 
+import logging
 import os
 import secrets
 import uuid
 from datetime import datetime, timedelta, timezone
+from functools import lru_cache
 from typing import Any
 
+from google.api_core import exceptions as gcloud_exceptions
 from google.cloud import firestore
 
-_PROJECT = os.environ.get("GOOGLE_CLOUD_PROJECT", "project-d7e6174e-cca7-4d16-9d5")
-_DATABASE = "scan-firestore"
+from mad_platform import config
 
-_client = firestore.Client(project=_PROJECT, database=_DATABASE)
-_JOBS = _client.collection("scan_jobs")
-_TICKETS = _client.collection("filed_tickets")  # idempotency_key -> ticket_id
-_ESCALATIONS = _client.collection("escalations")  # review queue (per-job "finding" + cross-cutting admin kinds)
-_KB_VERSION = _client.collection("knowledge_base_version").document("wcag")
-_LEARNED_PATTERNS = _client.collection("learned_patterns")  # SME-confirmed Analyst/Editor patterns
-_USAGE = _client.collection("usage_counters")  # anti-abuse rate limits + the monthly scan budget
-_FEEDBACK = _client.collection("feedback")  # immediate "was this helpful" responses, testimonial source
-_EMAIL_CODES = _client.collection("email_verifications")  # doc id = normalized email
-_DEVICES = _client.collection("verified_devices")  # doc id = sha256(device cookie token)
+logger = logging.getLogger("mad_platform.firestore")
+
+
+@lru_cache(maxsize=1)
+def get_client() -> firestore.Client:
+    """The one Firestore client for this process.
+
+    Built lazily, on first use, rather than at import: a module-level
+    client makes importing anything that touches this file require live
+    GCP credentials, which is what made this codebase impossible to write
+    a test against (CODE_REVIEW_FINDINGS.md S2/T1). lru_cache gives the
+    module-global-singleton behavior the old code had, while leaving
+    import itself side-effect-free and the accessor monkeypatchable.
+
+    rag.py calls this too rather than opening its own client to the same
+    database -- there is one database, so there should be one connection
+    pool and one auth flow.
+    """
+    return firestore.Client(project=config.project_id(), database=config.FIRESTORE_DATABASE)
+
+
+def _collection(name: str) -> firestore.CollectionReference:
+    return get_client().collection(name)
+
+
+def _jobs() -> firestore.CollectionReference:
+    return _collection("scan_jobs")
+
+
+def _tickets() -> firestore.CollectionReference:
+    return _collection("filed_tickets")  # idempotency_key -> ticket_id
+
+
+def _escalations() -> firestore.CollectionReference:
+    return _collection("escalations")  # review queue (per-job "finding" + cross-cutting admin kinds)
+
+
+def _kb_version() -> firestore.DocumentReference:
+    return _collection("knowledge_base_version").document("wcag")
+
+
+def _learned_patterns() -> firestore.CollectionReference:
+    return _collection("learned_patterns")  # SME-confirmed Analyst/Editor patterns
+
+
+def _usage() -> firestore.CollectionReference:
+    return _collection("usage_counters")  # anti-abuse rate limits + the monthly scan budget
+
+
+def _feedback() -> firestore.CollectionReference:
+    return _collection("feedback")  # immediate "was this helpful" responses, testimonial source
+
+
+def _email_codes() -> firestore.CollectionReference:
+    return _collection("email_verifications")  # doc id = normalized email
+
+
+def _devices() -> firestore.CollectionReference:
+    return _collection("verified_devices")  # doc id = sha256(device cookie token)
+
 
 # Community-fork limits -- adjust here, not scattered through call sites.
-MAX_SCANS_PER_EMAIL_PER_DAY = 3
-MAX_SCANS_PER_IP_PER_DAY = 15  # TEMP: raised for benchmark testing, revert to 5 after (see DECISIONS_LOG.md)
-MAX_SCANS_PER_MONTH = 500  # a scan-count proxy for the $ budget, see DECISIONS_LOG.md
+#
+# Environment-overridable, and that is the actual fix rather than a
+# convenience. MAX_SCANS_PER_IP_PER_DAY sat at 15 in source under a
+# "TEMP: raised for benchmark testing, revert to 5 after" comment that
+# shipped to production and stayed there: a benchmark run needed a higher
+# ceiling for an afternoon, the only way to get one was to edit the
+# constant and redeploy, and the revert never happened. A comment that
+# says the value is wrong is not a control. So the numbers below are the
+# *intended* policy, and a temporary change is now an env var on one
+# revision that disappears the moment it is rolled back -- it cannot
+# silently become the permanent value in source.
+#
+# Read at call time, not into a module constant, so a test can set them
+# and so nothing here needs an environment at import (see config.py).
+_LIMIT_DEFAULTS = {
+    "MAD_MAX_SCANS_PER_EMAIL_PER_DAY": 3,
+    "MAD_MAX_SCANS_PER_IP_PER_DAY": 5,
+    "MAD_MAX_SCANS_PER_MONTH": 500,  # a scan-count proxy for the $ budget, see DECISIONS_LOG.md
+}
+
+
+def _limit(name: str) -> int:
+    """An unparseable or non-positive override falls back to the default
+    rather than being honored: a typo'd env var must not be able to set an
+    effective limit of 0 (nobody can scan) or a negative one (nobody is
+    limited).
+    """
+    raw = os.environ.get(name)
+    if raw:
+        try:
+            value = int(raw)
+        except ValueError:
+            logger.warning("%s=%r is not an integer -- using the default", name, raw)
+        else:
+            if value > 0:
+                return value
+            logger.warning("%s=%r is not positive -- using the default", name, raw)
+    return _LIMIT_DEFAULTS[name]
+
+
+def max_scans_per_email_per_day() -> int:
+    return _limit("MAD_MAX_SCANS_PER_EMAIL_PER_DAY")
+
+
+def max_scans_per_ip_per_day() -> int:
+    return _limit("MAD_MAX_SCANS_PER_IP_PER_DAY")
+
+
+def max_scans_per_month() -> int:
+    return _limit("MAD_MAX_SCANS_PER_MONTH")
+
+
+# How long a scan record (the job document: submitted URL, owner email,
+# every finding) stays before Firestore's TTL sweep removes it, and the
+# same for the escalation and feedback documents that hang off one.
+#
+# These collections had no `expires_at` at all, while usage counters,
+# verification codes and device tokens all did -- so the three collections
+# holding the *most* personal data were the three kept forever, and the
+# privacy page's "it deletes itself on schedule" paragraph sat one
+# paragraph below the list of what a scan collects. Writing the field is
+# only half of it: a Firestore TTL policy on each of `scan_jobs`,
+# `escalations` and `feedback` keyed to `expires_at` has to exist in the
+# project for anything to actually be deleted (see CODE_REVIEW_FIXES.md).
+SCAN_RECORD_RETENTION_DAYS = 365
+
+
+def _scan_record_expiry(now: datetime) -> datetime:
+    return now + timedelta(days=SCAN_RECORD_RETENTION_DAYS)
+
+
+# A worker's claim on a job. Long enough to cover a scan that is running
+# slowly (p99 is well under 5 minutes; this is 3x that) and short enough
+# that a worker killed mid-scan -- OOM, an instance eviction, a deploy --
+# does not lock the job out of its remaining Cloud Tasks attempts. The
+# lease is also released explicitly when the worker finishes either way,
+# so this ceiling only matters when a worker dies without unwinding.
+JOB_LEASE_SECONDS = 900
 
 # Email verification -- pattern adapted from a sibling project's own
 # battle-tested login-code flow (reviewed read-only for reference, not
@@ -78,7 +205,7 @@ def create_job(
     """
     job_id = str(uuid.uuid4())
     now = datetime.now(timezone.utc)
-    _JOBS.document(job_id).set(
+    _jobs().document(job_id).set(
         {
             "url": url,
             "trigger_type": trigger_type,
@@ -88,6 +215,11 @@ def create_job(
             "review_token": secrets.token_urlsafe(24),
             "created_at": now,
             "updated_at": now,
+            # Firestore TTL field. This document holds the submitter's
+            # email and every finding of their scan; see
+            # SCAN_RECORD_RETENTION_DAYS for why it now has an expiry and
+            # what still has to be configured in GCP for it to fire.
+            "expires_at": _scan_record_expiry(now),
         }
     )
     return job_id
@@ -103,7 +235,7 @@ def mark_job_started(job_id: str) -> None:
     queue wait time as if it were scan time.
     """
     now = datetime.now(timezone.utc)
-    _JOBS.document(job_id).update({"status": "in_progress", "started_at": now, "updated_at": now})
+    _jobs().document(job_id).update({"status": "in_progress", "started_at": now, "updated_at": now})
 
 
 def verify_review_token(job_id: str, token: str) -> bool:
@@ -123,7 +255,7 @@ def verify_review_token(job_id: str, token: str) -> bool:
 
 
 def get_job(job_id: str) -> dict[str, Any] | None:
-    doc = _JOBS.document(job_id).get()
+    doc = _jobs().document(job_id).get()
     return doc.to_dict() if doc.exists else None
 
 
@@ -166,25 +298,67 @@ def set_job_phase(job_id: str, phase: str) -> None:
     stages goes silent during both, and a healthy multi-second wait reads
     identically to a hang.
     """
-    _JOBS.document(job_id).update({"phase": phase, "updated_at": datetime.now(timezone.utc)})
+    _jobs().document(job_id).update({"phase": phase, "updated_at": datetime.now(timezone.utc)})
 
 
-def complete_job(job_id: str) -> None:
-    _JOBS.document(job_id).update({"status": "completed", "updated_at": datetime.now(timezone.utc)})
+def set_selected_pages(job_id: str, pages: list[str]) -> None:
+    """Records the page list this job's selection step actually decided on.
+
+    Deliberately a separate field from the `pages` checkpoint map, which
+    exists for a different purpose. Resume used to key off `pages` being
+    non-empty and treat its keys as "the pages this job chose" -- but the
+    entry URL is checkpointed into `pages` *before* selection runs, so a
+    job that died in the selection call (a Gemini call: exactly where it
+    dies) resumed with a page list of one. The scan then completed
+    "successfully" having checked a single page instead of three, with
+    nothing in the report, the status page or the logs saying the scope had
+    been cut. A crash checkpoint is not a decision; this field is the
+    decision, and only this field may drive resume.
+    """
+    _jobs().document(job_id).update(
+        {"selected_pages": pages, "updated_at": datetime.now(timezone.utc)}
+    )
+
+
+def complete_job(job_id: str, summary: dict[str, Any]) -> None:
+    """Marks the job completed AND writes its summary, in one write.
+
+    `summary` is required, and the two fields go out together, on purpose.
+    They used to be two writes from two different services -- the
+    orchestrator flipped status to "completed", and the worker wrote the
+    summary afterwards, with a Slack post, a Gemini call and a Resend
+    upload in between. For those several seconds `/api/status/{job_id}`
+    returned `{"status": "completed", "summary": null}`, which the status
+    page (polling every 2s) could not render: it threw and stopped
+    polling, leaving the user on a frozen "Starting..." screen for a scan
+    that had actually succeeded. Worse, if the run died in that window,
+    the Cloud Tasks retry short-circuited on `status == "completed"` and
+    the summary was never written at all.
+
+    A single atomic update makes `status == "completed"` mean "the summary
+    is there" by construction, so that window cannot reopen -- including
+    from some future third caller. Do not split this back into two writes,
+    and do not add a `summary=None` default: the required argument is the
+    guard rail.
+    """
+    _jobs().document(job_id).update(
+        {"status": "completed", "summary": summary, "updated_at": datetime.now(timezone.utc)}
+    )
 
 
 def save_scan_summary(job_id: str, summary: dict[str, Any]) -> None:
-    """Persists the final scan outcome (score, severity counts, report
-    location, ticket/escalation counts) onto the job record -- the web UI's
-    status endpoint reads this back rather than needing the in-process
-    ScanResult, since the request that started the scan and the request
-    that polls for its result are two different HTTP calls.
+    """Updates the summary of an ALREADY-COMPLETED job -- the post-hoc
+    path only (app.py appends a CSV row when the site owner resolves a
+    pending escalation after the fact). The completing write itself goes
+    through complete_job() above, which writes status and summary
+    together; calling this to publish a summary for the first time
+    reintroduces the race that docstring describes.
     """
-    _JOBS.document(job_id).update({"summary": summary, "updated_at": datetime.now(timezone.utc)})
+    _jobs().document(job_id).update({"summary": summary, "updated_at": datetime.now(timezone.utc)})
 
 
 def fail_job(job_id: str, error: str) -> None:
-    _JOBS.document(job_id).update(
+    _jobs().document(job_id).update(
         {"status": "failed", "error": error, "updated_at": datetime.now(timezone.utc)}
     )
 
@@ -193,12 +367,12 @@ def get_ticket_for_finding(idempotency_key: str) -> str | None:
     """Checks whether a finding has already been filed -- the idempotency
     guard that keeps a retried pipeline step from double-filing.
     """
-    doc = _TICKETS.document(idempotency_key).get()
+    doc = _tickets().document(idempotency_key).get()
     return doc.to_dict()["ticket_id"] if doc.exists else None
 
 
 def record_ticket_for_finding(idempotency_key: str, ticket_id: str) -> None:
-    _TICKETS.document(idempotency_key).set(
+    _tickets().document(idempotency_key).set(
         {"ticket_id": ticket_id, "filed_at": datetime.now(timezone.utc)}
     )
 
@@ -214,16 +388,39 @@ def create_escalation(idempotency_key: str, finding_data: dict, job_id: str | No
     (kb_version_change, learned_pattern) that don't belong to any one scan
     owner and must stay on the separate admin-only path -- never route
     those through a per-job token.
+
+    create(), not set(): set() overwrote whatever was already at this
+    document ID, resetting an escalation's status back to "pending" and
+    discarding the reviewer's disposition. That fired for real whenever
+    the same key came round twice -- a Cloud Tasks retry of a scan whose
+    owner had already resolved an item, or (before the key included
+    job_id) another user's scan of the same site entirely. An escalation
+    document is created once and thereafter only ever moves forward
+    through resolve_escalation(); nothing should be able to rewind it, so
+    a duplicate create is a no-op that keeps the existing record rather
+    than a silent clobber.
     """
-    doc_ref = _ESCALATIONS.document(idempotency_key)
-    doc_ref.set(
-        {
-            **finding_data,
-            "job_id": job_id,
-            "status": "pending",
-            "created_at": datetime.now(timezone.utc),
-        }
-    )
+    doc_ref = _escalations().document(idempotency_key)
+    now = datetime.now(timezone.utc)
+    try:
+        doc_ref.create(
+            {
+                **finding_data,
+                "job_id": job_id,
+                "status": "pending",
+                "created_at": now,
+                # Same TTL window as the scan job it belongs to -- an
+                # escalation carries the same finding detail, so keeping it
+                # after its job is gone would defeat the job's own expiry.
+                "expires_at": _scan_record_expiry(now),
+            }
+        )
+    except gcloud_exceptions.AlreadyExists:
+        existing = doc_ref.get().to_dict() or {}
+        logger.info(
+            "Escalation %s already exists (job_id=%r, status=%r) -- keeping it, not overwriting",
+            idempotency_key, existing.get("job_id"), existing.get("status"),
+        )
     return idempotency_key
 
 
@@ -233,12 +430,12 @@ def list_escalations_for_job(job_id: str) -> list[dict[str, Any]]:
     """
     return [
         {"id": doc.id, **doc.to_dict()}
-        for doc in _ESCALATIONS.where(filter=firestore.FieldFilter("job_id", "==", job_id)).stream()
+        for doc in _escalations().where(filter=firestore.FieldFilter("job_id", "==", job_id)).stream()
     ]
 
 
 def list_pending_escalations() -> list[dict[str, Any]]:
-    return [{"id": doc.id, **doc.to_dict()} for doc in _ESCALATIONS.where(
+    return [{"id": doc.id, **doc.to_dict()} for doc in _escalations().where(
         filter=firestore.FieldFilter("status", "==", "pending")
     ).stream()]
 
@@ -248,7 +445,7 @@ def get_escalation(escalation_id: str) -> dict[str, Any] | None:
     list_pending_escalations(), this also returns already-resolved ones,
     for callers checking on an outcome rather than building a work queue.
     """
-    doc = _ESCALATIONS.document(escalation_id).get()
+    doc = _escalations().document(escalation_id).get()
     return {"id": doc.id, **doc.to_dict()} if doc.exists else None
 
 
@@ -256,7 +453,7 @@ def resolve_escalation(escalation_id: str, disposition: str, reviewer: str = "sm
     """disposition: 'confirm' or 'dismiss'. Returns the escalation's data
     so the caller (Action Agent) can file a ticket if confirmed.
     """
-    doc_ref = _ESCALATIONS.document(escalation_id)
+    doc_ref = _escalations().document(escalation_id)
     doc = doc_ref.get()
     if not doc.exists:
         raise ValueError(f"No escalation found with id {escalation_id!r}")
@@ -280,7 +477,7 @@ def iter_dismissed_findings() -> list[dict[str, Any]]:
     that doesn't run on a tight schedule.
     """
     dismissed = []
-    for job_doc in _JOBS.stream():
+    for job_doc in _jobs().stream():
         job = job_doc.to_dict()
         for page_url, page in job.get("pages", {}).items():
             for f in page.get("findings", []):
@@ -303,17 +500,17 @@ def save_learned_pattern(pattern_id: str, data: dict[str, Any]) -> None:
     a candidate pattern that's merely mined, not yet confirmed, lives only
     in the escalations queue.
     """
-    _LEARNED_PATTERNS.document(pattern_id).set(
+    _learned_patterns().document(pattern_id).set(
         {**data, "confirmed_at": datetime.now(timezone.utc)}
     )
 
 
 def list_learned_patterns() -> list[dict[str, Any]]:
-    return [{"id": doc.id, **doc.to_dict()} for doc in _LEARNED_PATTERNS.stream()]
+    return [{"id": doc.id, **doc.to_dict()} for doc in _learned_patterns().stream()]
 
 
 def get_kb_version() -> dict[str, Any] | None:
-    doc = _KB_VERSION.get()
+    doc = _kb_version().get()
     return doc.to_dict() if doc.exists else None
 
 
@@ -322,7 +519,7 @@ def touch_kb_check(checked_version: str) -> None:
     version actually changed -- so "last checked" is always accurate even
     on a no-op tick.
     """
-    _KB_VERSION.set(
+    _kb_version().set(
         {"last_checked_version": checked_version, "last_checked_at": datetime.now(timezone.utc)},
         merge=True,
     )
@@ -332,17 +529,91 @@ def set_kb_version(version: str) -> None:
     """Called after a successful refresh (auto or SME-confirmed) -- records
     which version the currently-stored embeddings actually reflect.
     """
-    _KB_VERSION.set({"version": version, "updated_at": datetime.now(timezone.utc)}, merge=True)
+    _kb_version().set({"version": version, "updated_at": datetime.now(timezone.utc)}, merge=True)
+
+
+def quota_email_key(email: str) -> str:
+    """The per-email quota identity.
+
+    Normalized for the quota key only, never for where the report is
+    actually sent -- gmail.com/googlemail.com ignore dots and treat
+    +anything as an alias of the same inbox, so without this,
+    "me+1@gmail.com", "me+2@gmail.com", ... would each get their own
+    fresh daily quota from a single real mailbox. Stripping a "+suffix"
+    for every domain too, since it's a widely (if not universally)
+    honored convention -- a cheap partial mitigation, not a complete one.
+
+    Split out of check_and_reserve_scan_quota so it can be exercised
+    directly by a test without a Firestore connection.
+    """
+    quota_email = email.strip().lower()
+    local, _, domain = quota_email.rpartition("@")
+    local = local.split("+", 1)[0]
+    if domain in ("gmail.com", "googlemail.com"):
+        local = local.replace(".", "")
+    return f"{local}@{domain}"
+
+
+@firestore.transactional
+def _check_and_reserve(transaction, month_ref, email_ref, ip_ref, now) -> tuple[bool, str]:
+    """The read-check-write body, run inside a real Firestore transaction.
+
+    Firestore requires every read in a transaction to precede every write,
+    which is exactly the shape this needs anyway. If any of the three
+    documents changes between the reads and the commit, the transaction
+    retries with fresh reads -- which is the whole point: two concurrent
+    submissions can no longer both read "one under the limit" and both
+    proceed.
+
+    Counts are written as explicit values rather than firestore.Increment
+    transforms. Increment is atomic per-field, which is what made the old
+    version *look* safe, but atomic increments say nothing about the gap
+    between the read that authorized the write and the write itself. Inside
+    a serializable transaction the value we read is the value we are
+    incrementing, so writing it out plainly is both correct and honest
+    about the mechanism doing the work.
+    """
+    month_doc = month_ref.get(transaction=transaction)
+    month_count = month_doc.to_dict().get("scans", 0) if month_doc.exists else 0
+    email_doc = email_ref.get(transaction=transaction)
+    email_count = email_doc.to_dict().get("count", 0) if email_doc.exists else 0
+    ip_doc = ip_ref.get(transaction=transaction)
+    ip_count = ip_doc.to_dict().get("count", 0) if ip_doc.exists else 0
+
+    if month_count >= max_scans_per_month():
+        return False, "We've hit our free capacity for this month. Please check back next month."
+    if email_count >= max_scans_per_email_per_day():
+        return False, "You've reached today's scan limit for this email address. Please try again tomorrow."
+    if ip_count >= max_scans_per_ip_per_day():
+        return False, "Too many scans from this network today. Please try again tomorrow."
+
+    day_expiry = now + timedelta(days=2)
+    transaction.set(email_ref, {"count": email_count + 1, "updated_at": now, "expires_at": day_expiry}, merge=True)
+    transaction.set(ip_ref, {"count": ip_count + 1, "updated_at": now, "expires_at": day_expiry}, merge=True)
+    transaction.set(
+        month_ref,
+        {"scans": month_count + 1, "updated_at": now, "expires_at": now + timedelta(days=35)},
+        merge=True,
+    )
+    return True, ""
 
 
 def check_and_reserve_scan_quota(email: str, ip: str) -> tuple[bool, str]:
     """The anti-abuse + budget gate, called once per /scan submission,
     before create_job(). Three independent checks, all must pass:
     per-email daily cap, per-IP daily cap, and the global monthly scan
-    budget. Each check both reads and, if it passes, atomically increments
-    in the same call -- so this doubles as the reservation, not just a
-    check, a caller that gets `(True, "")` back has already consumed one
-    unit of quota, it should not increment again separately.
+    budget. Check and reservation happen together inside one Firestore
+    transaction -- so this doubles as the reservation, not just a check: a
+    caller that gets `(True, "")` back has already consumed one unit of
+    quota and should not increment again separately.
+
+    The transaction is load-bearing, not decoration. This function used to
+    claim atomicity in this docstring while doing all three reads first and
+    all three writes last, with nothing tying them together -- so N
+    concurrent requests could all read "under the limit" and all proceed.
+    This is the only thing between a public, unauthenticated endpoint and
+    unbounded Gemini/Playwright spend, and scan-onboarding runs at
+    concurrency 20 across multiple instances, so that was a live race.
 
     Returns (allowed, reason). reason is empty when allowed=True, and a
     short human-readable string when False, meant to be shown directly to
@@ -357,50 +628,73 @@ def check_and_reserve_scan_quota(email: str, ip: str) -> tuple[bool, str]:
     not just a theoretical one.
     """
     now = datetime.now(timezone.utc)
+    month_ref, email_ref, ip_ref = _quota_refs(email, ip, now)
+    return _check_and_reserve(get_client().transaction(), month_ref, email_ref, ip_ref, now)
+
+
+def _quota_refs(email: str, ip: str, now: datetime):
+    """The three counter documents one submission touches.
+
+    Extracted so reserve and refund cannot drift on how a key is built --
+    a refund that computed a different document ID would silently credit
+    a counter nobody is reading.
+    """
     day_key = now.strftime("%Y-%m-%d")
     month_key = now.strftime("%Y-%m")
+    usage = _usage()
+    return (
+        usage.document(f"month_{month_key}"),
+        usage.document(f"email_{quota_email_key(email)}_{day_key}"),
+        usage.document(f"ip_{ip}_{day_key}"),
+    )
 
-    month_ref = _USAGE.document(f"month_{month_key}")
-    month_doc = month_ref.get()
-    month_count = month_doc.to_dict().get("scans", 0) if month_doc.exists else 0
-    if month_count >= MAX_SCANS_PER_MONTH:
-        return False, "We've hit our free capacity for this month. Please check back next month."
 
-    # Normalized for the quota key only, never for where the report is
-    # actually sent -- gmail.com/googlemail.com ignore dots and treat
-    # +anything as an alias of the same inbox, so without this,
-    # "me+1@gmail.com", "me+2@gmail.com", ... would each get their own
-    # fresh daily quota from a single real mailbox. Stripping a "+suffix"
-    # for every domain too, since it's a widely (if not universally)
-    # honored convention -- a cheap partial mitigation, not a complete one.
-    quota_email = email.strip().lower()
-    local, _, domain = quota_email.rpartition("@")
-    local = local.split("+", 1)[0]
-    if domain in ("gmail.com", "googlemail.com"):
-        local = local.replace(".", "")
-    quota_email = f"{local}@{domain}"
+@firestore.transactional
+def _release_reservation(transaction, month_ref, email_ref, ip_ref, now) -> None:
+    month_doc = month_ref.get(transaction=transaction)
+    email_doc = email_ref.get(transaction=transaction)
+    ip_doc = ip_ref.get(transaction=transaction)
 
-    email_key = f"email_{quota_email}_{day_key}"
-    email_ref = _USAGE.document(email_key)
-    email_doc = email_ref.get()
-    email_count = email_doc.to_dict().get("count", 0) if email_doc.exists else 0
-    if email_count >= MAX_SCANS_PER_EMAIL_PER_DAY:
-        return False, "You've reached today's scan limit for this email address. Please try again tomorrow."
+    for ref, doc, field in (
+        (month_ref, month_doc, "scans"),
+        (email_ref, email_doc, "count"),
+        (ip_ref, ip_doc, "count"),
+    ):
+        if not doc.exists:
+            continue
+        current = doc.to_dict().get(field, 0)
+        # Floor at 0: a refund must never be able to push a counter
+        # negative and hand out free quota later in the day.
+        transaction.set(ref, {field: max(0, current - 1), "updated_at": now}, merge=True)
 
-    ip_key = f"ip_{ip}_{day_key}"
-    ip_ref = _USAGE.document(ip_key)
-    ip_doc = ip_ref.get()
-    ip_count = ip_doc.to_dict().get("count", 0) if ip_doc.exists else 0
-    if ip_count >= MAX_SCANS_PER_IP_PER_DAY:
-        return False, "Too many scans from this network today. Please try again tomorrow."
 
-    # All three checks passed -- reserve the quota now, atomically, so a
-    # burst of concurrent requests can't all read "under the limit" and
-    # all proceed before any of them increments.
-    email_ref.set({"count": firestore.Increment(1), "updated_at": now, "expires_at": now + timedelta(days=2)}, merge=True)
-    ip_ref.set({"count": firestore.Increment(1), "updated_at": now, "expires_at": now + timedelta(days=2)}, merge=True)
-    month_ref.set({"scans": firestore.Increment(1), "updated_at": now, "expires_at": now + timedelta(days=35)}, merge=True)
-    return True, ""
+def refund_scan_quota(email: str, ip: str) -> None:
+    """Gives back the unit that check_and_reserve_scan_quota consumed.
+
+    Called only when the scan the reservation paid for provably never
+    started -- today that is exactly one case: the Cloud Tasks enqueue
+    raised, so no worker will ever pick the job up (see app._start_scan).
+    Without this, a queue misconfiguration billed the visitor a scan they
+    never got, and their next attempt could be refused for a scan that
+    never ran.
+
+    Deliberately best-effort and non-raising: the caller is already on an
+    error path showing the visitor a failure, and a failed refund must not
+    turn that into a 500 on top. It is logged instead -- a refund that
+    silently does nothing is a quota leak worth seeing in the logs.
+
+    Same day/month key derivation as the reservation (`_quota_refs`), so
+    this is only correct when called in the same UTC day as the reserve.
+    That is true for its one caller, which refunds inline, milliseconds
+    later; a delayed or batched refund would need the original keys
+    carried forward rather than recomputed.
+    """
+    now = datetime.now(timezone.utc)
+    month_ref, email_ref, ip_ref = _quota_refs(email, ip, now)
+    try:
+        _release_reservation(get_client().transaction(), month_ref, email_ref, ip_ref, now)
+    except Exception:  # noqa: BLE001 - see docstring: never worsen an error path
+        logger.exception("Failed to refund scan quota for %r / %r", quota_email_key(email), ip)
 
 
 def save_feedback(job_id: str, rating: int, comment: str = "", allow_testimonial: bool = False, contact: str | None = None) -> None:
@@ -411,16 +705,50 @@ def save_feedback(job_id: str, rating: int, comment: str = "", allow_testimonial
     delivered gets meaningfully better response rates than a cold follow-up
     days later.
     """
-    _FEEDBACK.add(
+    now = datetime.now(timezone.utc)
+    _feedback().add(
         {
             "job_id": job_id,
             "rating": rating,
             "comment": comment,
             "allow_testimonial": allow_testimonial,
             "contact": contact,
-            "created_at": datetime.now(timezone.utc),
+            "created_at": now,
+            # TTL, same window as the scan it is about. `contact` is a
+            # free-text email the submitter typed, so this is personal data
+            # with no reason to outlive the scan record it comments on.
+            "expires_at": _scan_record_expiry(now),
         }
     )
+
+
+def has_feedback(job_id: str) -> bool:
+    """Whether this job already has a feedback submission.
+
+    Used to make the public feedback endpoint single-use per job: without
+    it, one job ID is an unlimited write channel into this collection
+    (CODE_REVIEW_FINDINGS.md F5). limit(1) because existence is the only
+    question being asked.
+    """
+    existing = _feedback().where(filter=firestore.FieldFilter("job_id", "==", job_id)).limit(1).get()
+    return len(list(existing)) > 0
+
+
+@firestore.transactional
+def _merge_page_field(transaction, job_ref, page_url: str, fields: dict, now) -> None:
+    snapshot = job_ref.get(transaction=transaction)
+    current_stage = None
+    if snapshot.exists:
+        current_stage = (snapshot.to_dict() or {}).get("pages", {}).get(page_url, {}).get("stage")
+
+    new_stage = fields.get("stage")
+    if new_stage in PAGE_STAGES and current_stage in PAGE_STAGES:
+        if PAGE_STAGES.index(current_stage) > PAGE_STAGES.index(new_stage):
+            fields = {k: v for k, v in fields.items() if k != "stage"}
+            if not fields:
+                return
+
+    transaction.set(job_ref, {"pages": {page_url: fields}, "updated_at": now}, merge=True)
 
 
 def _set_page_field(job_id: str, page_url: str, fields: dict) -> None:
@@ -430,17 +758,99 @@ def _set_page_field(job_id: str, page_url: str, fields: dict) -> None:
     already at "verified" would otherwise silently downgrade it -- exactly
     the kind of bug that defeats resumability while looking correct at a
     glance, causing full reprocessing on every "resume" instead of none.
-    """
-    new_stage = fields.get("stage")
-    if new_stage in PAGE_STAGES:
-        current_stage = get_page_stage(job_id, page_url)
-        if current_stage in PAGE_STAGES and PAGE_STAGES.index(current_stage) > PAGE_STAGES.index(new_stage):
-            fields = {k: v for k, v in fields.items() if k != "stage"}
-            if not fields:
-                return
 
-    doc_ref = _JOBS.document(job_id)
-    doc_ref.set({"pages": {page_url: fields}, "updated_at": datetime.now(timezone.utc)}, merge=True)
+    That guard is now inside a transaction. It used to be a plain
+    read-modify-write: get_page_stage() read the job, the decision was
+    made, and only then did the merge go out -- so two workers on the same
+    job (which Cloud Tasks can produce, see worker_app's lease) could both
+    read "crawled", both decide their write was a step forward, and one
+    could still land after the other's "verified". Reading the stage in the
+    same transaction that writes it closes that window: a concurrent change
+    to the job document aborts and retries with a fresh read.
+    """
+    _merge_page_field(
+        get_client().transaction(),
+        _jobs().document(job_id),
+        page_url,
+        fields,
+        datetime.now(timezone.utc),
+    )
+
+
+@firestore.transactional
+def _claim_lease(transaction, job_ref, owner: str, now, lease_seconds: int) -> bool:
+    snapshot = job_ref.get(transaction=transaction)
+    if not snapshot.exists:
+        return False
+    data = snapshot.to_dict() or {}
+    held_by = data.get("lease_owner")
+    held_until = data.get("lease_expires_at")
+    if held_by and held_by != owner and held_until is not None and now < held_until:
+        return False
+    transaction.update(
+        job_ref,
+        {
+            "lease_owner": owner,
+            "lease_expires_at": now + timedelta(seconds=lease_seconds),
+            "updated_at": now,
+        },
+    )
+    return True
+
+
+def claim_job_lease(job_id: str, owner: str, lease_seconds: int = JOB_LEASE_SECONDS) -> bool:
+    """Tries to claim exclusive execution of this job. True if claimed.
+
+    Cloud Tasks retries on dispatch-deadline expiry, and deadline expiry
+    does not require the first attempt to have *stopped* -- so a scan that
+    runs long gets a second worker while the first is still running. The
+    existing "already completed?" check does not catch that: neither
+    attempt has completed anything yet. Two live workers on one job
+    duplicate every Gemini call (double spend), race each other's page
+    checkpoints, both reach route_and_file, and both send the owner a
+    report email.
+
+    containerConcurrency=1 does not help here: it serializes requests
+    within an instance, and these two are on different instances out of
+    the max-instances pool.
+
+    A transaction is what makes this a lock rather than a suggestion --
+    read-then-write without one has exactly the race it is meant to
+    prevent. The claim is re-entrant for the same owner so a worker that
+    re-claims its own job is not locked out by itself.
+    """
+    return _claim_lease(
+        get_client().transaction(), _jobs().document(job_id), owner, datetime.now(timezone.utc), lease_seconds
+    )
+
+
+@firestore.transactional
+def _clear_lease(transaction, job_ref, owner: str) -> None:
+    snapshot = job_ref.get(transaction=transaction)
+    if not snapshot.exists:
+        return
+    if (snapshot.to_dict() or {}).get("lease_owner") != owner:
+        return  # someone else's lease (ours already expired and was taken) -- leave it alone
+    transaction.update(
+        job_ref,
+        {"lease_owner": firestore.DELETE_FIELD, "lease_expires_at": firestore.DELETE_FIELD},
+    )
+
+
+def release_job_lease(job_id: str, owner: str) -> None:
+    """Drops this worker's claim so a retry can start immediately instead
+    of waiting out JOB_LEASE_SECONDS.
+
+    Only clears a lease this owner still holds -- if ours already expired
+    and another worker took it, clearing it would hand that worker's job to
+    a third. Best-effort and non-raising: this runs in a `finally`, and a
+    failure here must not mask the real outcome of the scan. The lease
+    expiring on its own is the fallback.
+    """
+    try:
+        _clear_lease(get_client().transaction(), _jobs().document(job_id), owner)
+    except Exception:  # noqa: BLE001 - see docstring
+        logger.warning("[%s] Could not release job lease (it will expire on its own)", job_id, exc_info=True)
 
 
 def code_request_cooldown_remaining(email: str) -> float:
@@ -451,7 +861,7 @@ def code_request_cooldown_remaining(email: str) -> float:
     locks someone out permanently.
     """
     key = email.strip().lower()
-    doc = _EMAIL_CODES.document(key).get()
+    doc = _email_codes().document(key).get()
     timestamps = doc.to_dict().get("request_log", []) if doc.exists else []
     if not timestamps:
         return 0
@@ -480,7 +890,7 @@ def generate_email_code(email: str) -> str:
     code = f"{secrets.randbelow(1_000_000):06d}"
     expires_at = now + timedelta(minutes=EMAIL_CODE_TTL_MINUTES)
 
-    doc_ref = _EMAIL_CODES.document(key)
+    doc_ref = _email_codes().document(key)
     doc = doc_ref.get()
     timestamps = doc.to_dict().get("request_log", []) if doc.exists else []
     if timestamps and (now - timestamps[-1]).total_seconds() > CODE_REQUEST_RESET_AFTER_SECONDS:
@@ -508,7 +918,7 @@ def verify_email_code(email: str, code: str) -> bool:
     was adapted from.
     """
     key = email.strip().lower()
-    doc_ref = _EMAIL_CODES.document(key)
+    doc_ref = _email_codes().document(key)
     doc = doc_ref.get()
     if not doc.exists:
         return False
@@ -544,7 +954,7 @@ def set_verified_device(token_hash: str, email: str) -> None:
     one person shouldn't fight over a single remembered slot).
     """
     expires_at = datetime.now(timezone.utc) + timedelta(days=REMEMBER_DEVICE_DAYS)
-    _DEVICES.document(token_hash).set({"email": email.strip().lower(), "expires_at": expires_at})
+    _devices().document(token_hash).set({"email": email.strip().lower(), "expires_at": expires_at})
 
 
 def get_verified_device_email(token_hash: str) -> str | None:
@@ -554,7 +964,7 @@ def get_verified_device_email(token_hash: str) -> str | None:
     timestamp directly so expiry takes effect immediately, not only once
     the TTL sweep gets to it.
     """
-    doc = _DEVICES.document(token_hash).get()
+    doc = _devices().document(token_hash).get()
     if not doc.exists:
         return None
     data = doc.to_dict()

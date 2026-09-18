@@ -118,18 +118,13 @@ async def run_wcag_freshness_check(simulate_current_version: str | None = None) 
     }
 
 
-def resolve_kb_escalation(escalation_id: str, disposition: str, reviewer: str = "sme") -> None:
-    """SME disposition on a pending kb_version_change escalation. confirm ->
-    re-embeds the existing curated corpus and advances the stored version
-    pointer now; dismiss -> stays on the old version, consciously (an SME
-    judged the corpus itself needs a real content update first -- e.g. a
-    genuine WCAG 3.0 jump -- before it's safe to just re-embed and move on).
-    """
-    if disposition not in ("confirm", "dismiss"):
-        raise ValueError(f"disposition must be 'confirm' or 'dismiss', got {disposition!r}")
-
-    data = fs.resolve_escalation(escalation_id, disposition=disposition, reviewer=reviewer)
-
-    if disposition == "confirm":
-        embed_and_store_corpus()
-        fs.set_kb_version(data["new_version"])
+# resolve_kb_escalation() used to live here: the SME disposition handler
+# for a "kb_version_change" escalation. It is gone, along with its
+# renderers in web/app.py and review_escalations.py, because nothing has
+# created an escalation of that kind since the human gate was removed
+# (see this module's docstring and DECISIONS_LOG.md) -- verified by grep
+# across the whole package. It was unreachable code that described a
+# workflow this system no longer has, which is worse than absent: a reader
+# of app.py's review queue would conclude WCAG refreshes still wait on a
+# human, and review_escalations.py's renderer would have raised KeyError on
+# e['old_version'] if it had ever met a differently-shaped document.

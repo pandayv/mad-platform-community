@@ -2,15 +2,40 @@
 # no longer touches either now that scan submission just enqueues a Cloud
 # Task instead of running the pipeline in-process. Same base pattern as
 # the original combined Dockerfile, just pointed at worker_app instead.
-FROM python:3.13-slim
+#
+# Digest-pinned for the same reason as Dockerfile; keep all four images on
+# the same base digest and move them together.
+FROM python:3.13-slim@sha256:9d2e5553305c7c7b0097999bb17187c69b921ccd6bc9d40e4bb5ebe652c00285
 
 WORKDIR /app
 
+# Browsers go to a shared, world-readable path instead of the installing
+# user's home. `playwright install --with-deps` has to run as root (it
+# apt-installs Chromium's system libraries), but the process that actually
+# launches Chromium runs as `app` below -- and the default location,
+# /root/.cache/ms-playwright, is unreadable to that user, so the browser
+# would simply not be found at runtime. Setting this before the install
+# puts it somewhere both users can reach; the chmod makes it readable and
+# traversable without making anything writable.
+ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt \
-    && python -m playwright install --with-deps chromium
+    && python -m playwright install --with-deps chromium \
+    && chmod -R a+rX /ms-playwright
 
 COPY mad_platform ./mad_platform
+
+# This is the image where dropping root matters most: it renders
+# arbitrary, attacker-chosen websites, and Playwright launches Chromium
+# with --no-sandbox by default (it only keeps the renderer sandbox when
+# chromiumSandbox=True is passed explicitly, which crawler.py does not).
+# So the container is the only boundary between a hostile page and this
+# service's credentials -- Firestore write, GCS write, Vertex AI. A
+# renderer compromise landing as UID 1000 instead of UID 0 is the whole
+# point of this line.
+RUN useradd --create-home --uid 1000 app
+USER app
 
 ENV PORT=8080
 EXPOSE 8080

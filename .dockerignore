@@ -1,10 +1,35 @@
+# Everything here is excluded from the build context uploaded to Cloud
+# Build for all four images. The Dockerfiles only COPY requirements.txt,
+# mad_platform/ and mine_patterns.py, so nothing below was ever baked into
+# an image -- but it was all being uploaded on every build, which is both
+# slow and, in the backup directory's case, ships a superseded git history
+# (the pre-identity-rewrite one, see DECISIONS_LOG.md) to a build service
+# for no reason. Add new large or private top-level directories here.
 .venv/
 venv/
 __pycache__/
 *.pyc
 .git/
+.gitignore
 reports/
 tests/
 *.md
 .env
 .env.*
+
+# Local-only working state and caches.
+.pytest_cache/
+.ruff_cache/
+.claude/
+.DS_Store
+**/.DS_Store
+
+# Superseded pre-rewrite repo copy: carries its own .git/ and .venv/ (~30 MB).
+_pre_rewrite_backup_20260904/
+
+# Docs, design assets and diagrams -- none of them are served by any of
+# the four services (the app's own images live in mad_platform/web/static,
+# which IS copied as part of mad_platform/).
+docs/
+assets/
+architecture_diagrams/

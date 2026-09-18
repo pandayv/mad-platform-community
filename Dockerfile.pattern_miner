@@ -2,7 +2,10 @@
 # Flash via Vertex AI, same as every other judgment call in this
 # pipeline, so this image is as light as scan-wcag-poller's: no
 # Playwright/Chromium, no self-hosted model to bake in.
-FROM python:3.13-slim
+#
+# Digest-pinned for the same reason as Dockerfile; keep all four images on
+# the same base digest and move them together.
+FROM python:3.13-slim@sha256:9d2e5553305c7c7b0097999bb17187c69b921ccd6bc9d40e4bb5ebe652c00285
 
 WORKDIR /app
 
@@ -11,5 +14,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY mad_platform ./mad_platform
 COPY mine_patterns.py .
+
+# Drop root -- see Dockerfile's copy of this comment.
+RUN useradd --create-home --uid 1000 app
+USER app
 
 CMD ["python3", "mine_patterns.py"]

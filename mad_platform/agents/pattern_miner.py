@@ -50,9 +50,7 @@ CONFIDENCE_THRESHOLD = 0.75
 # reads of the same variable: this URL only ever reaches a Slack alert
 # (optional, currently unconfigured), never a link a real user depends on,
 # so it isn't worth crashing the whole weekly job over.
-_APP_BASE_URL = os.environ.get(
-    "MAD_APP_BASE_URL", "https://scan-onboarding-531805458979.us-central1.run.app"
-)
+_APP_BASE_URL = os.environ.get("MAD_APP_BASE_URL", "https://mad-platform.org")
 
 
 class _PatternAssessment(BaseModel):
