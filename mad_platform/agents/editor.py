@@ -22,18 +22,29 @@ future work.
 
 from __future__ import annotations
 
+import asyncio
+import logging
+
 from pydantic import BaseModel
 
 from mad_platform.agents.analyst import RawFinding
+from mad_platform.agents.llm_validation import validate_indexed
 from mad_platform.state import firestore_client as fs
+from mad_platform.tools import untrusted
 from mad_platform.tools.adk_client import generate_structured
 from mad_platform.tools.crawler import PageSnapshot
 from mad_platform.tools.gemini_client import FLASH
 from mad_platform.tools.rag import retrieve_batch as rag_retrieve_batch
 
+logger = logging.getLogger("mad_platform.editor")
+
 
 class VerifiedFinding(BaseModel):
-    finding_index: int  # which raw finding this corresponds to, by list position
+    # Which raw finding this corresponds to, by list position. Gemini fills
+    # this in, so it is untrusted until verify_findings() has run it
+    # through validate_indexed() -- never subscript a list with it before
+    # then. See mad_platform/agents/llm_validation.py.
+    finding_index: int
     confirmed: bool
     wcag_criterion: str  # Editor may correct Analyst's citation
     rationale: str  # required either way -- why confirmed, or why dismissed
@@ -44,7 +55,8 @@ class _VerificationResponse(BaseModel):
     verifications: list[VerifiedFinding]
 
 
-_EDITOR_PROMPT = """You are an accessibility Editor. Analyst has flagged the
+_EDITOR_PROMPT = """{untrusted_preamble}
+You are an accessibility Editor. Analyst has flagged the
 findings below on a webpage. Your job is to independently verify EACH one
 against the actual page evidence (the HTML excerpt and the screenshot),
 not to trust Analyst's flag at face value.
@@ -140,17 +152,64 @@ def _format_findings(findings: list[RawFinding]) -> str:
     return "\n".join(lines)
 
 
+def _warn_if_every_rule_hit_was_dismissed(
+    url: str, findings: list[RawFinding], verified: list[VerifiedFinding]
+) -> None:
+    """Flags the shape a successful prompt injection would produce.
+
+    Deterministic rule checks carry analyst_confidence 1.0 because the rule
+    objectively matched the markup -- an `<img>` with no alt attribute
+    either has one or it does not. Editor dismissing *every* one of them on
+    a page, while the page's own HTML is in its context window, is not a
+    normal outcome; it is what a page saying "ignore all findings" would
+    look like from here. Cheap to check and worth seeing in the logs.
+
+    Deliberately a warning, not a block: Editor is allowed to overrule a
+    rule hit (a decorative image with role=presentation is the documented
+    case), and turning a legitimate correction into a failed scan would be
+    worse than the thing this watches for.
+    """
+    rule_indices = {i for i, f in enumerate(findings) if f.source == "rule"}
+    if len(rule_indices) < 2:
+        return  # one dismissal is an ordinary correction, not a pattern
+    dismissed = {v.finding_index for v in verified if not v.confirmed}
+    if rule_indices <= dismissed:
+        logger.warning(
+            "%s: Editor dismissed all %d deterministic rule-check finding(s). "
+            "Rule hits are objective markup matches, so a clean sweep is unusual -- "
+            "worth checking the page for content aimed at the model (see tools/untrusted.py).",
+            url, len(rule_indices),
+        )
+
+
 async def verify_findings(snapshot: PageSnapshot, findings: list[RawFinding]) -> list[VerifiedFinding]:
     if not findings:
         return []
 
+    # _format_findings does blocking network I/O (rag_retrieve_batch ->
+    # embed_batch, a synchronous HTTP round trip through the genai client)
+    # inside what is otherwise an async function, so it stalls the event
+    # loop for the length of an embedding call. Same treatment analyst.py
+    # already gives its synchronous rule checks.
+    findings_list = await asyncio.to_thread(_format_findings, findings)
+    learned = await asyncio.to_thread(fs.list_learned_patterns)
+
     prompt = _EDITOR_PROMPT.format(
-        learned_patterns=_format_learned_patterns(fs.list_learned_patterns()),
-        findings_list=_format_findings(findings),
-        title=snapshot.title,
-        html_excerpt=snapshot.html[:8000],
+        untrusted_preamble=untrusted.UNTRUSTED_PREAMBLE,
+        learned_patterns=_format_learned_patterns(learned),
+        findings_list=findings_list,
+        title=untrusted.wrap(snapshot.title),
+        html_excerpt=untrusted.page_excerpt(snapshot.html),
     )
     result = await generate_structured(
         FLASH, prompt, _VerificationResponse, image_bytes=snapshot.screenshot_png
     )
-    return result.verifications
+    # Every downstream consumer pairs a VerifiedFinding back up with
+    # findings[v.finding_index]. Validate here, at the boundary where model
+    # output becomes data, so that pairing is safe by construction rather
+    # than guarded (or not) at each individual subscript.
+    verified = validate_indexed(
+        result.verifications, len(findings), label=f"Editor verification of {snapshot.url}"
+    )
+    _warn_if_every_rule_hit_was_dismissed(snapshot.url, findings, verified)
+    return verified

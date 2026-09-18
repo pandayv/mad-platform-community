@@ -2,7 +2,10 @@
 # never renders a page, it only fetches one small HTML page (requests)
 # and calls Gemini/Firestore. No point paying Chromium's install cost on
 # every cold start for a service that never uses it.
-FROM python:3.13-slim
+#
+# Digest-pinned for the same reason as Dockerfile; keep all four images on
+# the same base digest and move them together.
+FROM python:3.13-slim@sha256:9d2e5553305c7c7b0097999bb17187c69b921ccd6bc9d40e4bb5ebe652c00285
 
 WORKDIR /app
 
@@ -10,6 +13,10 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY mad_platform ./mad_platform
+
+# Drop root -- see Dockerfile's copy of this comment.
+RUN useradd --create-home --uid 1000 app
+USER app
 
 ENV PORT=8080
 EXPOSE 8080

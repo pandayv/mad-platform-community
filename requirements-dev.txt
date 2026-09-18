@@ -1,0 +1,21 @@
+# Development/test-only dependencies. Deliberately separate from
+# requirements.txt: none of this ships in any of the four container
+# images, which install requirements.txt only.
+#
+#   .venv/bin/pip install -r requirements-dev.txt
+#   .venv/bin/python -m pytest
+#
+# Exact pins, matching requirements.txt's convention.
+pytest==9.1.1
+pytest-asyncio==1.4.0
+
+# S6: vulnerability scanning for requirements.txt. Exact pins with nothing
+# watching them are a snapshot, not a policy -- the packages that mattered
+# (cryptography, requests, urllib3, certifi, aiohttp) were all current at
+# review time by luck rather than process. Run it alongside the tests:
+#
+#   .venv/bin/pip-audit -r requirements.txt
+#
+# .github/dependabot.yml handles the routine weekly bumps; this is the
+# on-demand check before a deploy.
+pip-audit==2.10.1

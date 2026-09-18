@@ -30,14 +30,8 @@ from google.adk.runners import InMemoryRunner
 from google.genai import types
 from pydantic import BaseModel
 
-# Same Vertex AI / location requirements as gemini_client.py -- set here
-# too since ADK reads its model config from the environment rather than
-# an explicit client object the way the raw SDK does.
-os.environ.setdefault("GOOGLE_GENAI_USE_ENTERPRISE", "1")
-os.environ.setdefault(
-    "GOOGLE_CLOUD_PROJECT", os.environ.get("GOOGLE_CLOUD_PROJECT", "project-d7e6174e-cca7-4d16-9d5")
-)
-os.environ.setdefault("GOOGLE_CLOUD_LOCATION", "global")
+from mad_platform import config
+from mad_platform.tools import retry
 
 _APP_NAME = "mad_platform"
 _USER_ID = "mad_platform"
@@ -55,7 +49,26 @@ T = TypeVar("T", bound=BaseModel)
 _runner_cache: dict[tuple[str, type], InMemoryRunner] = {}
 
 
+def _configure_adk_env() -> None:
+    """Same Vertex AI / location requirements as gemini_client.py -- set
+    in the environment because ADK reads its model config from there
+    rather than from an explicit client object the way the raw SDK does.
+
+    Called from _get_runner (first actual use), not at import time: an
+    import that mutates os.environ is a side effect, and this module used
+    to do it with `GOOGLE_CLOUD_PROJECT` defaulted to the *hackathon*
+    project's ID -- so merely importing anything in the agent pipeline
+    silently pointed ADK at a project this repo must never touch
+    (CLAUDE.md). config.project_id() has no fallback and raises instead;
+    the setdefault below can only ever re-affirm what is already set.
+    """
+    os.environ.setdefault("GOOGLE_GENAI_USE_ENTERPRISE", "1")
+    os.environ.setdefault("GOOGLE_CLOUD_PROJECT", config.project_id())
+    os.environ.setdefault("GOOGLE_CLOUD_LOCATION", config.VERTEX_LOCATION)
+
+
 def _get_runner(model: str, schema: type[BaseModel]) -> InMemoryRunner:
+    _configure_adk_env()
     key = (model, schema)
     if key not in _runner_cache:
         agent = LlmAgent(
@@ -104,16 +117,18 @@ async def generate_structured(
     """One structured-output call through an ADK agent. Bounded timeout,
     one retry -- a second failure is real and should surface, matching
     the pattern already used in gemini_client.py and crawler.py.
+
+    Shares tools/retry.py's policy with those two rather than carrying its
+    own copy of the loop: this one retried every exception class equally,
+    so a 4xx that could never succeed cost two attempts and two timeouts'
+    worth of latency, and a 429 was retried after 1.5s. See that module.
     """
     runner = _get_runner(model, schema)
 
-    last_error: Exception | None = None
-    for attempt in range(1, _MAX_ATTEMPTS + 1):
-        try:
-            text = await _run_once(runner, prompt, image_bytes)
-            return schema.model_validate_json(text)
-        except Exception as exc:  # noqa: BLE001 - deliberately broad, matches gemini_client.py
-            last_error = exc
-            if attempt < _MAX_ATTEMPTS:
-                await asyncio.sleep(1.5 * attempt)
-    raise last_error  # noqa: RSE102
+    async def _attempt() -> T:
+        text = await _run_once(runner, prompt, image_bytes)
+        return schema.model_validate_json(text)
+
+    return await retry.with_retry_async(
+        _attempt, attempts=_MAX_ATTEMPTS, label=f"adk.generate_structured({model}/{schema.__name__})"
+    )

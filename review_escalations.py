@@ -16,7 +16,6 @@ import os
 
 from mad_platform.agents.action_agent import resolve_escalation
 from mad_platform.agents.pattern_miner import resolve_pattern_escalation
-from mad_platform.agents.wcag_auto_heal import resolve_kb_escalation
 from mad_platform.state import firestore_client as fs
 from mad_platform.tools.issue_sink import IssueSink, JiraIssueSink, MockIssueSink
 
@@ -32,12 +31,17 @@ def _issue_sink() -> IssueSink:
 
 
 def list_pending() -> None:
-    """Three kinds of escalation share this one queue -- a low-confidence
-    or critical finding, a WCAG version change the auto-heal loop
-    couldn't confidently classify as minor, or a mined dismissal pattern
+    """Two kinds of escalation share this one queue -- a low-confidence or
+    critical finding, or a mined dismissal pattern
     (mad_platform/agents/pattern_miner.py) awaiting confirmation before it
-    becomes persistent memory. Same human-approval mechanism, three
+    becomes persistent memory. Same human-approval mechanism, two
     different judgment calls behind it.
+
+    There used to be a third, "kb_version_change". Nothing has created one
+    since the WCAG refresh stopped waiting on a human gate
+    (DECISIONS_LOG.md), so its branch here was unreachable -- and would
+    have raised KeyError on e['old_version'] if it had ever met a
+    differently-shaped document.
     """
     pending = fs.list_pending_escalations()
     if not pending:
@@ -46,12 +50,7 @@ def list_pending() -> None:
     print(f"{len(pending)} pending escalation(s):\n")
     for e in pending:
         print(f"ID: {e['id']}")
-        if e.get("kind") == "kb_version_change":
-            print(f"  Type: WCAG knowledge-base version change")
-            print(f"  {e['old_version']} -> {e['new_version']}  (classified: {e['change_type']}, confidence={e['confidence']:.2f})")
-            print(f"  Reasoning: {e['reasoning']}")
-            print(f"  Why flagged: not a confident 'minor' classification -- needs review before re-embedding")
-        elif e.get("kind") == "learned_pattern":
+        if e.get("kind") == "learned_pattern":
             print(f"  Type: learned dismissal pattern (Gemini-mined)")
             print(f"  WCAG {e['wcag_criterion']}  seen {e['occurrence_count']} time(s)  confidence={e['confidence']:.2f}")
             print(f"  Pattern: {e['pattern_description']}")
@@ -71,14 +70,6 @@ def resolve(escalation_id: str, disposition: str) -> None:
         return
 
     kind = escalation.get("kind")
-    if kind == "kb_version_change":
-        resolve_kb_escalation(escalation_id, disposition=disposition, reviewer="cli-review")
-        if disposition == "confirm":
-            print(f"Confirmed. Knowledge base re-embedded and advanced to {escalation['new_version']}.")
-        else:
-            print(f"Dismissed. Knowledge base stays on its current version -- corpus needs a real content update first.")
-        return
-
     if kind == "learned_pattern":
         resolve_pattern_escalation(escalation_id, disposition=disposition, reviewer="cli-review")
         if disposition == "confirm":

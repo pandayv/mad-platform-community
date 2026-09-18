@@ -12,13 +12,15 @@ than the more typical Flash-vs-Pro split.
 
 from __future__ import annotations
 
-import os
-import time
+from functools import lru_cache
 from typing import TypeVar
 
 from google import genai
 from google.genai import types
 from pydantic import BaseModel
+
+from mad_platform import config
+from mad_platform.tools import retry
 
 FLASH_LITE = "gemini-3.5-flash-lite"
 FLASH = "gemini-3.7-flash"
@@ -29,11 +31,20 @@ EMBEDDING_MODEL = "gemini-embedding-001"
 _TIMEOUT_MS = 60_000
 _MAX_ATTEMPTS = 2
 
-_PROJECT = os.environ.get("GOOGLE_CLOUD_PROJECT", "project-d7e6174e-cca7-4d16-9d5")
-_client = genai.Client(
-    vertexai=True, project=_PROJECT, location="global",
-    http_options=types.HttpOptions(timeout=_TIMEOUT_MS),
-)
+
+@lru_cache(maxsize=1)
+def get_client() -> genai.Client:
+    """Lazily-built, process-wide Vertex AI client. Not at import time:
+    see firestore_client.get_client's docstring. The project ID comes from
+    config with no fallback -- the old default named the hackathon project.
+    """
+    return genai.Client(
+        vertexai=True,
+        project=config.project_id(),
+        location=config.VERTEX_LOCATION,
+        http_options=types.HttpOptions(timeout=_TIMEOUT_MS),
+    )
+
 
 T = TypeVar("T", bound=BaseModel)
 
@@ -57,28 +68,27 @@ def client_for_key(api_key: str | None):
     pipeline right before its first real deployment.
     """
     if not api_key:
-        return _client
+        return get_client()
     return genai.Client(api_key=api_key, http_options=types.HttpOptions(timeout=_TIMEOUT_MS))
 
 
 PRO_MODEL = "gemini-3.7-pro"  # only reachable via a user-supplied key, see client_for_key() above
 
 
-def _with_retry(call):
+def _with_retry(call, label: str = "gemini"):
     """One retry on a transient failure (including a timeout) -- bounded,
     not a loop, matching the retry pattern already used for page fetches
     (crawler.py) and the Orchestrator's own retry gate. A second failure
     is a real problem and should surface, not be swallowed.
+
+    The policy itself lives in tools/retry.py now, shared with adk_client
+    and crawler, because this loop used to retry *everything*: a 400 from a
+    malformed prompt and a 403 from a missing IAM binding cost twice as
+    much and took twice as long to report a failure that could not have
+    gone any other way, and a 429 was retried after 1.5s, which is far too
+    soon to help and adds to the pressure that caused it.
     """
-    last_error: Exception | None = None
-    for attempt in range(1, _MAX_ATTEMPTS + 1):
-        try:
-            return call()
-        except Exception as exc:  # noqa: BLE001 - deliberately broad, matches crawler.py's approach
-            last_error = exc
-            if attempt < _MAX_ATTEMPTS:
-                time.sleep(1.5 * attempt)
-    raise last_error  # noqa: RSE102 - re-raising the last real exception, not a bare raise
+    return retry.with_retry(call, attempts=_MAX_ATTEMPTS, label=label)
 
 
 def generate_structured(
@@ -97,7 +107,7 @@ def generate_structured(
     parts.append(prompt)
 
     def _call():
-        response = _client.models.generate_content(
+        response = get_client().models.generate_content(
             model=model,
             contents=parts,
             config=types.GenerateContentConfig(
@@ -107,15 +117,15 @@ def generate_structured(
         )
         return schema.model_validate_json(response.text)
 
-    return _with_retry(_call)
+    return _with_retry(_call, label=f"generate_structured({model})")
 
 
 def embed(text: str) -> list[float]:
     def _call():
-        result = _client.models.embed_content(model=EMBEDDING_MODEL, contents=text)
+        result = get_client().models.embed_content(model=EMBEDDING_MODEL, contents=text)
         return list(result.embeddings[0].values)
 
-    return _with_retry(_call)
+    return _with_retry(_call, label="embed")
 
 
 def embed_batch(texts: list[str]) -> list[list[float]]:
@@ -127,7 +137,7 @@ def embed_batch(texts: list[str]) -> list[list[float]]:
         return []
 
     def _call():
-        result = _client.models.embed_content(model=EMBEDDING_MODEL, contents=texts)
+        result = get_client().models.embed_content(model=EMBEDDING_MODEL, contents=texts)
         return [list(e.values) for e in result.embeddings]
 
-    return _with_retry(_call)
+    return _with_retry(_call, label=f"embed_batch({len(texts)})")

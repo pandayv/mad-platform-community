@@ -1,0 +1,40 @@
+# S6: dependency updates on a stated cadence instead of ad hoc.
+#
+# requirements.txt pins all 72 packages to exact versions, which is better
+# than most projects this size -- but exact pins without a refresh process
+# are just a snapshot of whatever was current the day they were written.
+# Nothing was watching them, there was no stated update cadence, and no
+# vulnerability scanning. The security-sensitive packages (cryptography,
+# requests, urllib3, certifi, aiohttp) all happened to be current at the
+# time of the review, which is luck rather than process.
+#
+# Weekly, grouped, so this produces one PR to review rather than seventy.
+# Security updates are deliberately NOT grouped -- those should arrive on
+# their own and be obvious.
+version: 2
+updates:
+  - package-ecosystem: "pip"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 5
+    groups:
+      runtime-dependencies:
+        applies-to: version-updates
+        patterns: ["*"]
+      # Dev/test tooling moves independently of what ships in the images.
+      dev-dependencies:
+        applies-to: version-updates
+        patterns: ["pytest*", "pip-audit"]
+    labels: ["dependencies"]
+
+  # The four images share one digest-pinned base (see the Dockerfiles).
+  # Dependabot proposes the new digest when python:3.13-slim moves, which
+  # is the only maintainable way to keep a digest pin current.
+  - package-ecosystem: "docker"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    labels: ["dependencies"]

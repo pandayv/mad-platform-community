@@ -14,36 +14,46 @@ re-crawl.
 from __future__ import annotations
 
 import logging
-import os
 from dataclasses import dataclass
 from urllib.parse import urljoin, urlparse
 
 from bs4 import BeautifulSoup
 from pydantic import BaseModel
 
+from mad_platform import config
 from mad_platform.agents.action_agent import LOW_CONFIDENCE_THRESHOLD, route_and_file
 from mad_platform.agents.analyst import RawFinding, analyze_page
 from mad_platform.agents.editor import VerifiedFinding, verify_findings
-from mad_platform.agents.reporter import RankedFinding, draft_email_summary, draft_report, rank_and_recommend
+from mad_platform.agents.llm_validation import validate_indexed
+from mad_platform.agents.reporter import (
+    RankedFinding,
+    compute_score,
+    draft_email_summary,
+    draft_report,
+    rank_and_recommend,
+    score_color,
+)
+from mad_platform.severity import count_by_severity
 from mad_platform.state import firestore_client as fs
 from mad_platform.state import storage_client
-from mad_platform.tools import notify
+from mad_platform.tools import notify, untrusted
 from mad_platform.tools.adk_client import generate_structured
 from mad_platform.tools.crawler import PageSnapshot, fetch_page
 from mad_platform.tools.gemini_client import FLASH, FLASH_LITE
 from mad_platform.tools.issue_sink import IssueSink, MockIssueSink
+from mad_platform.web import theme
 
 logger = logging.getLogger("mad_platform.orchestrator")
 
 MAX_ADDITIONAL_PAGES = 2
 
-_APP_BASE_URL = os.environ["MAD_APP_BASE_URL"]  # no fallback default on purpose:
-# the original hackathon build defaulted this to its own Cloud Run URL, which meant a
-# fork that forgot to set it would silently generate report/review links pointing at
-# the wrong (frozen) deployment instead of failing loudly. Fails fast at import time
-# now if unset, rather than embedding a wrong or missing URL into a link a real user
-# might click. Same fix applied to reporter.py and pattern_miner.py's own reads of
-# this variable.
+# Report/review links are built from config.app_base_url(), which has no
+# fallback default on purpose: the original hackathon build defaulted this
+# to its own Cloud Run URL, which meant a fork that forgot to set it would
+# silently generate links pointing at the wrong (frozen) deployment instead
+# of failing loudly. Read at call time rather than into a module constant,
+# so importing this module needs no configured environment -- the error is
+# identical, it just arrives when a link is actually built.
 
 
 class _PageSelection(BaseModel):
@@ -51,7 +61,8 @@ class _PageSelection(BaseModel):
     reasoning: str
 
 
-_PAGE_SELECTION_PROMPT = """You are coordinating an accessibility scan of a
+_PAGE_SELECTION_PROMPT = """{untrusted_preamble}
+You are coordinating an accessibility scan of a
 website. You've loaded the entry page and found these candidate links to
 other pages on the same site. Pick up to {max_pages} of them that are most
 likely to carry real accessibility and legal risk -- prioritize primary
@@ -109,9 +120,17 @@ async def select_pages(entry_snapshot: PageSnapshot) -> list[str]:
     if not candidates:
         return [entry_snapshot.url]
 
+    # Paths and link text both come off the scanned page, so they are
+    # delimited like any other untrusted span. Output-side containment was
+    # already here and stays: the loop below only accepts a path that is a
+    # key of `candidates`, so the model cannot invent a URL to visit even
+    # if the page talks it into trying.
     candidate_lines = "\n".join(f"{path}: {text or '(no link text)'}" for path, text in candidates.items())
     prompt = _PAGE_SELECTION_PROMPT.format(
-        max_pages=MAX_ADDITIONAL_PAGES, entry_url=entry_snapshot.url, candidates=candidate_lines
+        untrusted_preamble=untrusted.UNTRUSTED_PREAMBLE,
+        max_pages=MAX_ADDITIONAL_PAGES,
+        entry_url=entry_snapshot.url,
+        candidates=untrusted.wrap(candidate_lines),
     )
     selection = await generate_structured(FLASH_LITE, prompt, _PageSelection)
 
@@ -230,6 +249,14 @@ async def _run_analysis_pass(url: str) -> tuple[PageSnapshot, list[RawFinding], 
     snapshot = await fetch_page(url)
     raw_findings = await analyze_page(snapshot)
     verified = await verify_findings(snapshot, raw_findings)
+    # _process_page is the one place raw_findings and verified get zipped
+    # back together by index (_force_media_to_review, and the checkpoint
+    # write). verify_findings already guarantees every finding_index is in
+    # range; re-checking here -- on the single path that produces both
+    # lists, so it covers the retry pass too -- costs nothing and means a
+    # future second producer of VerifiedFinding can't quietly reintroduce
+    # the IndexError / negative-index-wraps bug at those subscripts.
+    verified = validate_indexed(verified, len(raw_findings), label=f"{url} verified findings")
     return snapshot, raw_findings, verified
 
 
@@ -280,6 +307,50 @@ class ScanResult:
     filed: list[tuple[int, RankedFinding, str]]
     escalated: list[tuple[int, RankedFinding, str]]
     already_filed: list[tuple[int, RankedFinding, str]]
+    summary: dict  # exactly what was written to the job record by complete_job()
+
+
+def build_scan_summary(
+    filing: dict[str, list], report_uri: str, issue_sink: IssueSink | None
+) -> dict:
+    """The final scan outcome the status page and report download read back.
+
+    This lives here, next to the code that produces the numbers, rather
+    than in worker_app.py where it used to. That split was the cause of
+    B4: the orchestrator marked the job completed, then handed a result
+    object back to the worker, which computed this dict and wrote it
+    afterwards -- so "completed" and "has a summary" were two writes from
+    two services with several seconds of Slack/Gemini/Resend work in
+    between. Building it here lets complete_job() write status and summary
+    in a single update; see firestore_client.complete_job.
+
+    csv_export: the CSV rows only exist in memory on this one sink
+    instance during this one scan, so they are persisted here (Firestore,
+    not a new storage_client path) for the download route to serve long
+    after this worker instance is gone. getattr keeps it optional rather
+    than coupling this to one concrete IssueSink implementation --
+    MockIssueSink has nothing to export.
+    """
+    all_ranked = [f for _, f, _ in filing["filed"] + filing["escalated"] + filing["already_filed"]]
+    # count_by_severity, not a local dict built with counts.get(sev, 0) + 1:
+    # that pattern silently created a phantom key for any off-vocabulary
+    # severity, so the donut (which iterates the four known tiers) and the
+    # total_findings headline below it disagreed on the same screen.
+    counts = count_by_severity([r.severity for r in all_ranked])
+    score = compute_score(all_ranked)
+    export_fn = getattr(issue_sink, "export", None)
+
+    return {
+        "score": score,
+        "score_color": score_color(score),
+        "severity_counts": counts,
+        "principle_counts": theme.principle_counts([r.wcag_criterion for r in all_ranked]),
+        "total_findings": len(all_ranked),
+        "filed_count": len(filing["filed"]) + len(filing["already_filed"]),
+        "escalated_count": len(filing["escalated"]),
+        "report_uri": report_uri,
+        "csv_export": export_fn() if export_fn else "",
+    }
 
 
 async def run_one_time_scan(
@@ -298,12 +369,27 @@ async def run_one_time_scan(
     logger.info("Scan started: %s (resume=%s)", url, bool(existing_job))
 
     try:
-        if existing_job and existing_job.get("pages"):
-            # True resume: reuse the page list this job already decided on,
-            # rather than re-running page selection (a fresh LLM call isn't
-            # guaranteed to pick the same pages twice, and doesn't need to --
-            # resuming means continuing the same job, not re-deciding its scope).
-            pages = list(existing_job["pages"].keys())
+        if existing_job and existing_job.get("selected_pages"):
+            # True resume: reuse the page list this job's selection step
+            # actually decided on, rather than re-running page selection (a
+            # fresh LLM call isn't guaranteed to pick the same pages twice,
+            # and doesn't need to -- resuming means continuing the same job,
+            # not re-deciding its scope).
+            #
+            # Keyed off `selected_pages`, NOT off `pages` being non-empty,
+            # and the distinction is the whole of B11. `pages` is the
+            # per-page checkpoint map, and the entry URL is checkpointed
+            # into it one line BEFORE select_pages runs. So a first attempt
+            # that died inside the selection call -- a Gemini call, which is
+            # exactly where it dies -- left a job whose `pages` had one key,
+            # and the resume branch read that crash checkpoint as "this job
+            # chose one page". The retry then skipped selection entirely and
+            # completed "successfully" having scanned one page instead of
+            # three, with nothing in the report, the status page or the logs
+            # saying so -- while the landing page's comparison table claims
+            # multi-page scanning. A checkpoint is not a decision.
+            pages = list(existing_job["selected_pages"])
+            logger.info("[%s] Resuming with %d previously selected page(s)", job_id, len(pages))
         else:
             if job_id is None:
                 job_id = fs.create_job(url, owner_contact=owner_contact)
@@ -314,6 +400,10 @@ async def run_one_time_scan(
             logger.info("[%s] Phase: selecting_pages (Gemini call)", job_id)
             fs.set_job_phase(job_id, "selecting_pages")
             pages = await select_pages(entry_snapshot)
+            # Persisted immediately, before any page is analyzed: this write
+            # is what makes the resume branch above safe, so it must not
+            # drift away from select_pages returning.
+            fs.set_selected_pages(job_id, pages)
             logger.info("[%s] Selected %d page(s) to analyze", job_id, len(pages))
 
         logger.info("[%s] Phase: analyzing_pages", job_id)
@@ -347,7 +437,10 @@ async def run_one_time_scan(
             job_id, len(filing["filed"]) + len(filing["already_filed"]), len(filing["escalated"]),
         )
         for _index, finding, ticket_id in filing["filed"]:
-            logger.info("[%s] Jira ticket filed: %s (WCAG %s)", job_id, ticket_id, finding.wcag_criterion)
+            # Not "Jira": this sink is CsvIssueSink and the id is a "CSV-n"
+            # row (DECISIONS_LOG.md records the CSV-only decision; this log
+            # line was the one Jira reference the sweep missed).
+            logger.info("[%s] Ticket filed: %s (WCAG %s)", job_id, ticket_id, finding.wcag_criterion)
         for _index, finding, escalation_id in filing["escalated"]:
             logger.info(
                 "[%s] Awaiting owner review: %s (WCAG %s)", job_id, escalation_id, finding.wcag_criterion
@@ -376,16 +469,25 @@ async def run_one_time_scan(
         )
         report_uri = storage_client.save_report(job_id, report)
         logger.info("[%s] Report saved: %s", job_id, report_uri)
-        fs.complete_job(job_id)
+
+        # Status and summary go out together, in one write, and nothing
+        # that can fail or block sits between building the summary and
+        # writing it. Everything below this line (Slack, the email draft,
+        # the Resend upload) is post-completion notification: the user's
+        # status page is already fully renderable before any of it runs.
+        # Do not move complete_job() back above this -- the gap is the bug.
+        summary = build_scan_summary(filing, report_uri, issue_sink)
+        fs.complete_job(job_id, summary)
         logger.info("[%s] Scan complete: %s", job_id, url)
 
+        app_base_url = config.app_base_url()
         notify.summary(
             f"Scan complete: {url}",
             [
                 f"{len(ranked)} confirmed finding(s) across {len(pages)} page(s)",
                 f"Filed automatically: {len(filing['filed']) + len(filing['already_filed'])}",
                 f"Awaiting owner review: {len(filing['escalated'])}",
-                f"Report: {_APP_BASE_URL}/report/{job_id}",
+                f"Report: {app_base_url}/report/{job_id}",
             ],
         )
 
@@ -396,7 +498,7 @@ async def run_one_time_scan(
                 for index, _finding, _escalation_id in filing["escalated"]
             ]
             review_url = (
-                f"{_APP_BASE_URL}/review/link/{job_id}/{review_token}" if review_lines and review_token else None
+                f"{app_base_url}/review/link/{job_id}/{review_token}" if review_lines and review_token else None
             )
             email_summary = draft_email_summary(
                 url,
@@ -404,23 +506,35 @@ async def run_one_time_scan(
                 score,
                 counts,
                 exec_summary,
-                report_url=f"{_APP_BASE_URL}/report/{job_id}",
-                csv_url=f"{_APP_BASE_URL}/report/{job_id}/tickets.csv",
+                report_url=f"{app_base_url}/report/{job_id}",
+                csv_url=f"{app_base_url}/report/{job_id}/tickets.csv",
             )
-            # CSV export is CsvIssueSink-specific, not part of every IssueSink
-            # (MockIssueSink, used in tests/local runs, has no tickets to
-            # export) -- getattr keeps this optional rather than coupling
-            # the orchestrator to one concrete sink implementation.
-            export_fn = getattr(issue_sink, "export", None)
+            # Reuses the CSV already exported into the summary above rather
+            # than calling sink.export() a second time -- one export, one
+            # set of rows, so the attachment and the download route can
+            # never disagree.
             attachments = [("report.html", report.encode("utf-8"))]
-            if export_fn:
-                attachments.append(("tickets.csv", export_fn().encode("utf-8")))
+            if summary["csv_export"]:
+                attachments.append(("tickets.csv", summary["csv_export"].encode("utf-8")))
             notify.send_report_email(
                 recipient, url, email_summary, review_lines=review_lines, review_url=review_url, attachments=attachments
             )
     except Exception as exc:  # noqa: BLE001
         if job_id is not None:  # only unset if fs.create_job itself is what failed
-            fs.fail_job(job_id, str(exc))
+            # Never downgrade an already-completed job. Everything after
+            # complete_job() is post-completion notification (Slack, the
+            # Gemini email draft, the Resend upload with its 10s timeout);
+            # a failure there means the user did not get an email, not that
+            # their scan failed -- the report is saved, the summary is
+            # written, the status page renders. Marking it "failed" would
+            # show "Scan failed: <a Resend timeout>" over a scan that
+            # actually succeeded, and would overwrite the status the
+            # completion write just published. Still re-raised, so Cloud
+            # Tasks and the logs see the real failure.
+            if (fs.get_job(job_id) or {}).get("status") == "completed":
+                logger.exception("[%s] Scan completed, but post-completion notification failed", job_id)
+            else:
+                fs.fail_job(job_id, str(exc))
         raise
 
     return ScanResult(
@@ -432,4 +546,5 @@ async def run_one_time_scan(
         filed=filing["filed"],
         escalated=filing["escalated"],
         already_filed=filing["already_filed"],
+        summary=summary,
     )

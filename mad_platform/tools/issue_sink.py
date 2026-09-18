@@ -2,9 +2,22 @@
 
 The filing logic sits behind this interface so an additional tracker
 could be added later without changing Orchestrator or Reporter.
-JiraIssueSink is the real implementation; MockIssueSink lets the pipeline
-be tested end to end before real Jira credentials exist -- the
-abstraction is what makes that possible without blocking on account setup.
+
+**CsvIssueSink is the real implementation.** Every scan the deployed
+services run files through it (web/app.py and web/worker_app.py both
+construct one, and nothing offers a choice), because the community fork's
+whole point is that a visitor needs no ticket-tracker credentials --
+DECISIONS_LOG.md records that decision.
+
+This docstring used to say "JiraIssueSink is the real implementation",
+which was true of the original build and has been wrong since the fork.
+That is not a cosmetic error: a reader forms a model of how ticketing
+works from exactly this line, and orchestrator.py was still logging
+"Jira ticket filed" for a CSV row on the strength of the same
+misunderstanding. JiraIssueSink is now legacy -- kept because
+review_escalations.py can still opt into it when JIRA_URL is set, not
+because anything in the deployed path uses it. MockIssueSink is for tests
+and for run_scan.py's default.
 """
 
 from __future__ import annotations
@@ -24,6 +37,10 @@ class IssueSink(ABC):
 
 
 class JiraIssueSink(IssueSink):
+    """Legacy, and not on any deployed path -- see the module docstring.
+    Reachable only from review_escalations.py when JIRA_URL is set.
+    """
+
     def __init__(self) -> None:
         self.base_url = os.environ["JIRA_URL"].rstrip("/")
         self.email = os.environ["JIRA_EMAIL"]

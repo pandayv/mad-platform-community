@@ -1,0 +1,10 @@
+# Test configuration only. This project is deployed as source copied into
+# a container (see the Dockerfiles), not as a built/installed package, so
+# there is deliberately no [build-system] or [project] table here.
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = "-q --strict-markers"
+asyncio_mode = "auto"
+filterwarnings = ["error::DeprecationWarning:mad_platform.*"]
