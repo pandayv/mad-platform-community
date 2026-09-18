@@ -3,64 +3,488 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Guardian Pest Control | Home</title>
-<link rel="stylesheet" href="style.css">
+<title>MAD Platform Architecture</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600;9..144,700&family=Public+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg: #f2f4f2; --surface: #ffffff; --ink: #14181a; --ink-soft: #52605c;
+  --border: #dde3e0; --border-strong: #c7d0cc;
+  --agent: #0d6e5c; --agent-tint: #e6f2ef;
+  --infra: #3f5568; --infra-tint: #e7ecf0;
+  --data: #a15c1f; --data-tint: #f7ecdf;
+  --external: #6c4fb0; --external-tint: #efeafa;
+  --human: #b5432f; --human-tint: #fbeae6;
+  --muted-stroke: #b7c0bc; --muted-text: #8b968f;
+  --shadow: 0 1px 2px rgba(20,24,26,0.04), 0 6px 16px rgba(20,24,26,0.05);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #12181a; --surface: #1a2225; --ink: #eef2ef; --ink-soft: #a9b6b1;
+    --border: #2c3a37; --border-strong: #3c4d49;
+    --agent: #4fd9b8; --agent-tint: #16332c;
+    --infra: #9fb3c8; --infra-tint: #202b34;
+    --data: #e0a052; --data-tint: #3a2a15;
+    --external: #b39ce8; --external-tint: #2a2440;
+    --human: #e2735c; --human-tint: #3a2019;
+    --muted-stroke: #3c4a46; --muted-text: #5f6b67;
+    --shadow: 0 1px 2px rgba(0,0,0,0.35), 0 8px 20px rgba(0,0,0,0.35);
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #12181a; --surface: #1a2225; --ink: #eef2ef; --ink-soft: #a9b6b1;
+  --border: #2c3a37; --border-strong: #3c4d49;
+  --agent: #4fd9b8; --agent-tint: #16332c;
+  --infra: #9fb3c8; --infra-tint: #202b34;
+  --data: #e0a052; --data-tint: #3a2a15;
+  --external: #b39ce8; --external-tint: #2a2440;
+  --human: #e2735c; --human-tint: #3a2019;
+  --muted-stroke: #3c4a46; --muted-text: #5f6b67;
+  --shadow: 0 1px 2px rgba(0,0,0,0.35), 0 8px 20px rgba(0,0,0,0.35);
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body {
+  background: var(--bg); color: var(--ink);
+  font-family: "Public Sans", -apple-system, "Segoe UI", sans-serif;
+  line-height: 1.5; padding: 48px 20px 90px;
+}
+.mono { font-family: "JetBrains Mono", monospace; }
+.page { max-width: 1180px; margin: 0 auto; }
+header { margin-bottom: 24px; }
+.eyebrow {
+  font-family: "JetBrains Mono", monospace; font-size: 12px; letter-spacing: 0.09em;
+  text-transform: uppercase; color: var(--agent); font-weight: 600; margin-bottom: 10px;
+}
+h1 {
+  font-family: "Fraunces", Georgia, serif; font-size: 32px; font-weight: 600;
+  margin: 0 0 10px; text-wrap: balance; letter-spacing: -0.01em;
+}
+h2 {
+  font-family: "Fraunces", Georgia, serif; font-size: 22px; font-weight: 600;
+  margin: 0 0 6px; letter-spacing: -0.01em;
+}
+.dek { color: var(--ink-soft); font-size: 15px; max-width: 78ch; }
+.legend {
+  display: flex; flex-wrap: wrap; gap: 8px 18px; margin: 20px 0 20px;
+  padding: 14px 18px; background: var(--surface); border: 1px solid var(--border);
+  border-radius: 10px; box-shadow: var(--shadow); font-size: 12.5px;
+}
+.legend-item { display: flex; align-items: center; gap: 7px; color: var(--ink-soft); }
+.legend-dot { width: 10px; height: 10px; border-radius: 3px; flex-shrink: 0; }
+.diagram-frame {
+  background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
+  padding: 18px; box-shadow: var(--shadow); overflow-x: auto;
+}
+.diagram-frame img { max-width: 100%; height: auto; display: block; margin: 0 auto; border-radius: 6px; }
+figcaption { margin-top: 10px; font-size: 13px; color: var(--ink-soft); text-align: center; }
+.diagram-links { margin-top: 8px; font-size: 12.5px; color: var(--ink-soft); text-align: center; }
+.diagram-links a { color: inherit; }
+
+/* ---- prose walkthrough, restored from the pre-diagram text version ---- */
+.walkthrough { margin-top: 52px; }
+.walkthrough > .dek { margin-bottom: 28px; }
+.zone {
+  border: 1px dashed var(--border-strong);
+  border-radius: 16px;
+  padding: 28px 24px 24px;
+  margin-bottom: 28px;
+  position: relative;
+}
+.zone-label {
+  position: absolute; top: -12px; left: 20px;
+  background: var(--bg); padding: 0 10px;
+  font-family: "JetBrains Mono", monospace; font-size: 12px; font-weight: 600;
+  letter-spacing: 0.05em; text-transform: uppercase; color: var(--ink-soft);
+}
+.zone-note { font-size: 13px; color: var(--ink-soft); margin: -8px 0 20px; max-width: 68ch; }
+
+.trigger-row { display: flex; gap: 14px; flex-wrap: wrap; }
+.trigger {
+  flex: 1; min-width: 200px; border-radius: 10px; padding: 14px 16px;
+  border: 1px solid var(--border); background: var(--surface);
+}
+.trigger.active { border-color: var(--agent); box-shadow: 0 0 0 1px var(--agent) inset; }
+.trigger .label { font-weight: 600; font-size: 14px; margin-bottom: 3px; }
+.trigger .desc { font-size: 12.5px; color: var(--ink-soft); }
+.trigger .tag {
+  display: inline-block; font-family: "JetBrains Mono", monospace; font-size: 10px;
+  letter-spacing: 0.04em; text-transform: uppercase; padding: 2px 7px; border-radius: 5px;
+  margin-top: 8px; font-weight: 600; background: var(--agent-tint); color: var(--agent);
+}
+
+.pipeline { display: flex; flex-direction: column; gap: 0; }
+.step-row { display: flex; align-items: stretch; gap: 18px; }
+.step-connector { display: flex; flex-direction: column; align-items: center; width: 22px; flex-shrink: 0; }
+.step-connector .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--agent); margin-top: 22px; flex-shrink: 0; }
+.step-connector .line { width: 2px; flex: 1; background: var(--border-strong); margin-top: 4px; }
+.step-row:last-child .step-connector .line { display: none; }
+
+.step-card {
+  flex: 1; background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
+  padding: 16px 18px; margin-bottom: 16px; box-shadow: var(--shadow); position: relative;
+}
+.step-card.tool { border-left: 4px solid var(--infra); }
+.step-card.agent { border-left: 4px solid var(--agent); }
+.step-card.human { border-left: 4px solid var(--human); }
+
+.step-head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+.step-title { font-weight: 700; font-size: 15.5px; }
+.step-kind {
+  font-family: "JetBrains Mono", monospace; font-size: 10.5px; letter-spacing: 0.04em;
+  text-transform: uppercase; font-weight: 600; padding: 2px 8px; border-radius: 5px; white-space: nowrap;
+}
+.step-kind.agent { background: var(--agent-tint); color: var(--agent); }
+.step-kind.tool { background: var(--infra-tint); color: var(--infra); }
+.step-kind.human { background: var(--human-tint); color: var(--human); }
+
+.step-desc { font-size: 13.5px; color: var(--ink-soft); margin-top: 6px; max-width: 62ch; }
+
+.lens-tags { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 10px; }
+.lens-tag {
+  font-size: 10.5px; font-family: "JetBrains Mono", monospace; padding: 3px 8px; border-radius: 999px;
+  border: 1px solid var(--border-strong); color: var(--ink-soft); letter-spacing: 0.02em;
+}
+
+.branch-group { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-top: 10px; }
+.branch-item { background: var(--infra-tint); border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; font-size: 12px; color: var(--ink); }
+.branch-item b { display: block; font-size: 12.5px; margin-bottom: 2px; }
+
+.route-split { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-top: 4px; }
+
+.loop-diagram { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 8px; }
+.loop-node {
+  background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
+  padding: 10px 12px; font-size: 12.5px; flex: 1; min-width: 130px; text-align: center;
+}
+.loop-node.decision { border-color: var(--human); background: var(--human-tint); }
+.loop-arrow { color: var(--ink-soft); font-size: 16px; flex-shrink: 0; }
+
+.infra-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; }
+.infra-item { background: var(--infra-tint); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; }
+.infra-item .name { font-family: "JetBrains Mono", monospace; font-size: 12.5px; font-weight: 600; color: var(--infra); }
+.infra-item .role { font-size: 11.5px; color: var(--ink-soft); margin-top: 2px; }
+
+footer { margin-top: 24px; font-size: 12.5px; color: var(--ink-soft); font-family: "JetBrains Mono", monospace; }
+
+@media (max-width: 640px) {
+  .branch-group { grid-template-columns: 1fr; }
+  .route-split { grid-template-columns: 1fr; }
+  h1 { font-size: 26px; }
+}
+</style>
 </head>
 <body>
+
+<div class="page">
 <header>
-  <a class="brand" href="index.html">Guardian Pest Control</a>
-  <nav>
-    <a href="index.html">Home</a>
-    <a href="services.html">Services</a>
-    <a href="contact.html">Contact</a>
-  </nav>
+  <div class="eyebrow">System Architecture</div>
+  <h1>MAD Platform</h1>
+  <div class="dek">The full system in one picture. Walkthrough below.</div>
 </header>
 
-<div class="hero">
-  <h1>Pest problems? We've got you covered.</h1>
-  <p>Family-owned and operated, serving the greater metro area for over 15 years.
-     Same-day appointments available.</p>
-  <a class="cta-button" href="contact.html" tabindex="3">Get a Free Quote</a>
+<div class="legend">
+  <div class="legend-item"><span class="legend-dot" style="background:var(--agent)"></span>Agent step</div>
+  <div class="legend-item"><span class="legend-dot" style="background:var(--infra)"></span>Service / infra</div>
+  <div class="legend-item"><span class="legend-dot" style="background:var(--data)"></span>Output / data artifact</div>
+  <div class="legend-item"><span class="legend-dot" style="background:var(--human)"></span>Human-in-the-loop</div>
+  <div class="legend-item"><span style="border-bottom:2px dashed var(--ink-soft);width:16px;display:inline-block"></span>Scheduled tick (async, not per-scan)</div>
 </div>
 
-<main>
-  <div class="trust-row">
-    <div class="trust-item">
-      <img src="images/icon-house.svg" width="56" height="56">
-      <div class="trust-label">Licensed &amp; Insured</div>
-      <div class="trust-sub">State-certified technicians</div>
-    </div>
-    <div class="trust-item">
-      <img src="images/shield-badge-dark.svg" width="56" height="56" alt="Satisfaction guarantee badge">
-      <div class="trust-label">15+ Years</div>
-      <div class="trust-sub">Serving the metro area</div>
-    </div>
-    <div class="trust-item">
-      <img src="images/icon-inspect.svg" width="56" height="56" alt="">
-      <div class="trust-label">Free Inspections</div>
-      <div class="trust-sub">With every service agreement</div>
+<figure>
+<div class="diagram-frame">
+<svg viewBox="0 0 1260 660" role="img" aria-label="Three deployables. scan-onboarding, the always-on public Cloud Run service, runs the per-scan pipeline: a web form feeds Orchestrator, which fans out to Analyst's three parallel checks, merges into Editor for independent verification (with one capped retry back to Analyst), then Reporter ranks and drafts, then a route step either auto-exports a CSV of confirmed findings plus an emailed report, or sends low-confidence and critical findings to an SME review queue whose confirmations feed the same CSV and whose dismissals end there with a documented reason. Two separate scheduled deployables feed that pipeline asynchronously, not on every scan: scan-wcag-poller, woken daily by Cloud Scheduler, checks whether the WCAG standard changed and either auto-refreshes the knowledge base for a minor change or escalates a major one to the same SME queue; pattern-miner, a lightweight Cloud Run Job woken weekly by Cloud Scheduler, calls Gemini Flash over Editor's real dismissal history and, once a consistent pattern is confirmed, grounds Editor's prompt on every future scan." xmlns="http://www.w3.org/2000/svg" font-family="'Public Sans', sans-serif" fill="none" style="max-width:100%;height:auto">
+<defs>
+  <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+    <path d="M0,0 L10,5 L0,10 z" fill="currentColor"></path>
+  </marker>
+</defs>
+<g stroke="currentColor" fill="none">
+  <rect x="10" y="10" width="1240" height="330" rx="14" stroke-dasharray="4 4" opacity="0.5"></rect>
+  <rect x="10" y="360" width="610" height="270" rx="14" stroke-dasharray="4 4" opacity="0.5"></rect>
+  <rect x="640" y="360" width="610" height="270" rx="14" stroke-dasharray="4 4" opacity="0.5"></rect>
+</g>
+<text x="26" y="30" font-size="11.5" letter-spacing="0.04em" fill="currentColor" opacity="0.65">SCAN-ONBOARDING &middot; ALWAYS-ON, PUBLIC CLOUD RUN SERVICE</text>
+<text x="26" y="380" font-size="11.5" letter-spacing="0.04em" fill="currentColor" opacity="0.65">SCAN-WCAG-POLLER &middot; SEPARATE CLOUD RUN SERVICE, WOKEN BY SCHEDULER</text>
+<text x="656" y="380" font-size="11.5" letter-spacing="0.04em" fill="currentColor" opacity="0.65">PATTERN-MINER &middot; CLOUD RUN JOB, WOKEN BY SCHEDULER</text>
+
+<!-- Lane 1: per-scan pipeline -->
+<g font-size="12.5">
+  <rect x="30" y="110" width="120" height="60" rx="8" fill="var(--infra-tint)" stroke="var(--infra)"></rect>
+  <text x="90" y="134" text-anchor="middle" fill="var(--infra)" font-weight="600">Scan request</text>
+  <text x="90" y="150" text-anchor="middle" fill="currentColor" font-size="10.5">web form, free,</text>
+  <text x="90" y="162" text-anchor="middle" fill="currentColor" font-size="10.5">no account</text>
+
+  <line x1="150" y1="140" x2="182" y2="140" stroke="currentColor" marker-end="url(#arrow)"></line>
+
+  <rect x="185" y="110" width="140" height="60" rx="8" fill="var(--agent-tint)" stroke="var(--agent)"></rect>
+  <text x="255" y="136" text-anchor="middle" fill="var(--agent)" font-weight="600">Orchestrator</text>
+  <text x="255" y="152" text-anchor="middle" fill="currentColor" font-size="10.5">select pages</text>
+
+  <line x1="325" y1="140" x2="357" y2="140" stroke="currentColor" marker-end="url(#arrow)"></line>
+
+  <rect x="360" y="70" width="170" height="140" rx="8" fill="var(--agent-tint)" stroke="var(--agent)"></rect>
+  <text x="445" y="92" text-anchor="middle" fill="var(--agent)" font-weight="600">Analyst</text>
+  <text x="445" y="106" text-anchor="middle" fill="currentColor" font-size="10">3 checks, parallel</text>
+  <rect x="374" y="116" width="142" height="26" rx="5" fill="var(--surface)" stroke="var(--border-strong)"></rect>
+  <text x="445" y="133" text-anchor="middle" font-size="10.5" fill="currentColor">Rule checks</text>
+  <rect x="374" y="148" width="142" height="26" rx="5" fill="var(--surface)" stroke="var(--border-strong)"></rect>
+  <text x="445" y="165" text-anchor="middle" font-size="10.5" fill="currentColor">Visual AI (screenshot)</text>
+  <rect x="374" y="180" width="142" height="26" rx="5" fill="var(--surface)" stroke="var(--border-strong)"></rect>
+  <text x="445" y="197" text-anchor="middle" font-size="10.5" fill="currentColor">Semantic AI (WCAG RAG)</text>
+
+  <line x1="530" y1="140" x2="562" y2="140" stroke="currentColor" marker-end="url(#arrow)"></line>
+
+  <rect x="565" y="110" width="130" height="60" rx="8" fill="var(--agent-tint)" stroke="var(--agent)"></rect>
+  <text x="630" y="136" text-anchor="middle" fill="var(--agent)" font-weight="600">Editor</text>
+  <text x="630" y="152" text-anchor="middle" fill="currentColor" font-size="10.5">verify + score</text>
+
+  <path d="M 610 170 C 590 205, 470 205, 450 172" stroke="currentColor" stroke-dasharray="3 3" marker-end="url(#arrow)"></path>
+  <text x="530" y="216" text-anchor="middle" font-size="10" fill="currentColor">retry, capped at 1</text>
+
+  <line x1="695" y1="140" x2="727" y2="140" stroke="currentColor" marker-end="url(#arrow)"></line>
+
+  <rect x="730" y="110" width="130" height="60" rx="8" fill="var(--agent-tint)" stroke="var(--agent)"></rect>
+  <text x="795" y="136" text-anchor="middle" fill="var(--agent)" font-weight="600">Reporter</text>
+  <text x="795" y="152" text-anchor="middle" fill="currentColor" font-size="10.5">rank + draft</text>
+
+  <line x1="860" y1="140" x2="888" y2="140" stroke="currentColor" marker-end="url(#arrow)"></line>
+
+  <polygon points="940,95 1000,140 940,185 880,140" fill="var(--human-tint)" stroke="var(--human)"></polygon>
+  <text x="940" y="136" text-anchor="middle" fill="var(--human)" font-size="10.5" font-weight="600">low conf. /</text>
+  <text x="940" y="149" text-anchor="middle" fill="var(--human)" font-size="10.5" font-weight="600">critical?</text>
+
+  <path d="M 995 118 L 1045 75" stroke="currentColor" marker-end="url(#arrow)"></path>
+  <text x="1043" y="90" text-anchor="end" font-size="10" fill="currentColor">no &mdash; default</text>
+  <rect x="1050" y="45" width="180" height="60" rx="8" fill="var(--data-tint)" stroke="var(--data)"></rect>
+  <text x="1140" y="66" text-anchor="middle" fill="var(--data)" font-weight="600">CSV export +</text>
+  <text x="1140" y="80" text-anchor="middle" fill="var(--data)" font-weight="600">emailed report</text>
+  <text x="1140" y="95" text-anchor="middle" font-size="9.5" fill="currentColor">Jira-importable columns</text>
+
+  <path d="M 995 162 L 1045 205" stroke="currentColor" marker-end="url(#arrow)"></path>
+  <text x="1043" y="200" text-anchor="end" font-size="10" fill="currentColor">yes</text>
+  <rect x="1050" y="205" width="180" height="60" rx="8" fill="var(--human-tint)" stroke="var(--human)"></rect>
+  <text x="1140" y="226" text-anchor="middle" fill="var(--human)" font-weight="600">SME review queue</text>
+  <text x="1140" y="241" text-anchor="middle" font-size="10" fill="currentColor">confirm &rarr; joins CSV</text>
+  <text x="1140" y="254" text-anchor="middle" font-size="10" fill="currentColor">dismiss &rarr; documented, ends here</text>
+
+  <path d="M 1140 205 C 1140 150, 1140 110, 1140 108" stroke="currentColor" stroke-dasharray="3 3" marker-end="url(#arrow)"></path>
+</g>
+
+<!-- Lane 2: WCAG freshness loop -->
+<g font-size="12.5">
+  <rect x="30" y="470" width="130" height="55" rx="8" fill="var(--infra-tint)" stroke="var(--infra)"></rect>
+  <text x="95" y="493" text-anchor="middle" fill="var(--infra)" font-weight="600" font-size="11.5">Cloud Scheduler</text>
+  <text x="95" y="509" text-anchor="middle" font-size="10.5" fill="currentColor">daily, 04:00</text>
+
+  <line x1="160" y1="497" x2="192" y2="497" stroke="currentColor" marker-end="url(#arrow)"></line>
+
+  <rect x="195" y="470" width="190" height="55" rx="8" fill="var(--infra-tint)" stroke="var(--infra)"></rect>
+  <text x="290" y="493" text-anchor="middle" fill="var(--infra)" font-weight="600" font-size="11.5">scan-wcag-poller</text>
+  <text x="290" y="509" text-anchor="middle" font-size="10.5" fill="currentColor">check WCAG version</text>
+
+  <line x1="385" y1="497" x2="417" y2="497" stroke="currentColor" marker-end="url(#arrow)"></line>
+
+  <polygon points="470,462 530,497 470,532 410,497" fill="var(--human-tint)" stroke="var(--human)"></polygon>
+  <text x="470" y="501" text-anchor="middle" fill="var(--human)" font-size="10.5" font-weight="600">minor or major?</text>
+
+  <path d="M 525 480 L 555 420" stroke="currentColor" stroke-dasharray="3 3" marker-end="url(#arrow)"></path>
+  <text x="490" y="440" font-size="10" fill="currentColor">minor</text>
+  <text x="440" y="418" font-size="10.5" fill="var(--data)">&uarr; auto-refreshes the WCAG knowledge base Analyst/Editor cite</text>
+
+  <path d="M 525 512 L 590 545" stroke="currentColor" marker-end="url(#arrow)"></path>
+  <text x="535" y="548" font-size="10" fill="currentColor">major &rarr; SME queue</text>
+</g>
+
+<!-- Lane 3: pattern-miner loop -->
+<g font-size="12.5">
+  <rect x="660" y="470" width="150" height="55" rx="8" fill="var(--infra-tint)" stroke="var(--infra)"></rect>
+  <text x="735" y="493" text-anchor="middle" fill="var(--infra)" font-weight="600" font-size="11.5">Cloud Scheduler</text>
+  <text x="735" y="509" text-anchor="middle" font-size="10.5" fill="currentColor">weekly, Sun 03:00</text>
+
+  <line x1="810" y1="497" x2="842" y2="497" stroke="currentColor" marker-end="url(#arrow)"></line>
+
+  <rect x="845" y="465" width="200" height="65" rx="8" fill="var(--infra-tint)" stroke="var(--infra)"></rect>
+  <text x="945" y="486" text-anchor="middle" fill="var(--infra)" font-weight="600" font-size="11.5">pattern-miner Job</text>
+  <text x="945" y="500" text-anchor="middle" font-size="10" fill="currentColor">Gemini Flash mines</text>
+  <text x="945" y="513" text-anchor="middle" font-size="10" fill="currentColor">Editor's dismissal history</text>
+
+  <line x1="1045" y1="497" x2="1077" y2="497" stroke="currentColor" marker-end="url(#arrow)"></line>
+
+  <polygon points="1130,462 1190,497 1130,532 1070,497" fill="var(--human-tint)" stroke="var(--human)"></polygon>
+  <text x="1130" y="493" text-anchor="middle" fill="var(--human)" font-size="10" font-weight="600">consistent</text>
+  <text x="1130" y="505" text-anchor="middle" fill="var(--human)" font-size="10" font-weight="600">pattern?</text>
+
+  <path d="M 1100 470 C 950 420, 700 300, 620 200" stroke="currentColor" stroke-dasharray="3 3" marker-end="url(#arrow)"></path>
+  <text x="900" y="418" font-size="10" fill="var(--data)">confirmed (SME-approved) &rarr; grounds Editor's prompt on every future scan</text>
+
+  <text x="1130" y="548" text-anchor="middle" font-size="10" fill="currentColor">no clear pattern &rarr; discarded</text>
+</g>
+</svg>
+</div>
+<figcaption>The three independently deployable pieces and how they connect: the always-on scan pipeline, and the two scheduled loops that keep it grounded without being part of any single scan.</figcaption>
+</figure>
+
+<div class="walkthrough">
+<h2>How it works</h2>
+<div class="dek">The diagram above shows the mechanism; this section walks through why each piece exists.</div>
+
+<div class="zone">
+  <div class="zone-label">Entry point</div>
+  <div class="trigger-row">
+    <div class="trigger active">
+      <div class="label">Web app: scan a site on demand</div>
+      <div class="desc">A URL submitted through the live front end kicks off a Review Cycle directly.</div>
+      <span class="tag">Live</span>
     </div>
   </div>
+</div>
 
-  <div class="photo-section">
-    <img src="images/lawn-hero.jpg" alt="A well-maintained residential lawn, the kind of yard Guardian treats every week">
-    <div class="photo-caption">Photo: Marek Ślusarczyk, Wikimedia Commons (CC BY 3.0)</div>
+<div class="zone">
+  <div class="zone-label">Review Cycle</div>
+  <div class="zone-note">Sequential where order matters, parallel where it doesn't, dynamic delegation only at genuine judgment points.</div>
+
+  <div class="pipeline">
+
+    <div class="step-row">
+      <div class="step-connector"><div class="dot"></div><div class="line"></div></div>
+      <div class="step-card agent">
+        <div class="step-head">
+          <span class="step-title">Orchestrator: select pages</span>
+          <span class="step-kind agent">agent</span>
+        </div>
+        <div class="step-desc">Fetches the entry page, reads nav links, decides which pages carry real risk (forms, checkout, account flows): a bounded, justified subset, not exhaustive crawling.</div>
+        <div class="lens-tags"><span class="lens-tag">orchestration: dynamic delegation</span></div>
+      </div>
+    </div>
+
+    <div class="step-row">
+      <div class="step-connector"><div class="dot"></div><div class="line"></div></div>
+      <div class="step-card tool">
+        <div class="step-head">
+          <span class="step-title">Analyst: parallel per-page checks</span>
+          <span class="step-kind tool">tool + agent</span>
+        </div>
+        <div class="step-desc">Independent checks with no ordering dependency, run concurrently. Tuned high-recall: over-flagging is acceptable, missing a real violation is not.</div>
+        <div class="branch-group">
+          <div class="branch-item"><b>Rule checks</b>contrast, alt text, headings, labels, ARIA, tab order</div>
+          <div class="branch-item"><b>Visual AI</b>screenshot review: focus indicators, visual contrast</div>
+          <div class="branch-item"><b>Semantic AI</b>grounded in the WCAG knowledge base below</div>
+        </div>
+        <div class="lens-tags"><span class="lens-tag">orchestration: parallel fan-out</span></div>
+      </div>
+    </div>
+
+    <div class="step-row">
+      <div class="step-connector"><div class="dot"></div><div class="line"></div></div>
+      <div class="step-card agent">
+        <div class="step-head">
+          <span class="step-title">Editor: independent verification</span>
+          <span class="step-kind agent">agent</span>
+        </div>
+        <div class="step-desc">Re-checks every flag against the underlying evidence. Dismisses false positives with a documented reason; assigns a validated confidence score to what survives.</div>
+      </div>
+    </div>
+
+    <div class="step-row">
+      <div class="step-connector"><div class="dot"></div><div class="line"></div></div>
+      <div class="step-card agent">
+        <div class="step-head">
+          <span class="step-title">Orchestrator: retry gate</span>
+          <span class="step-kind agent">agent</span>
+        </div>
+        <div class="step-desc">"Good enough, or one more pass?" Capped at exactly one retry: a bounded loop, not open-ended.</div>
+        <div class="lens-tags"><span class="lens-tag">feedback loop: bounded</span></div>
+      </div>
+    </div>
+
+    <div class="step-row">
+      <div class="step-connector"><div class="dot"></div><div class="line"></div></div>
+      <div class="step-card agent">
+        <div class="step-head">
+          <span class="step-title">Reporter: rank and draft</span>
+          <span class="step-kind agent">agent</span>
+        </div>
+        <div class="step-desc">Ranks confirmed findings by real-world risk (WCAG level, litigation pattern frequency, user impact) and drafts the styled report against one fixed template.</div>
+      </div>
+    </div>
+
+    <div class="step-row">
+      <div class="step-connector"><div class="dot"></div></div>
+      <div class="step-card">
+        <div class="step-head">
+          <span class="step-title">Orchestrator: route and act</span>
+        </div>
+        <div class="step-desc">One escalation gate: low confidence or critical severity routes to a human; everything else is fully autonomous.</div>
+        <div class="route-split">
+          <div class="branch-item" style="background:var(--data-tint)"><b>Action Agent</b>Exports confirmed findings as a CSV with Jira's importer columns (Summary/Description), plus emails the full report to the address the scan was submitted with. No ticket-tracker account required. Idempotent: a retried step never double-exports.<div class="lens-tags"><span class="lens-tag">idempotency</span></div></div>
+          <div class="branch-item" style="background:var(--human-tint)"><b>SME Review Queue</b>Confirm &rarr; joins the same CSV, live-updates the report the customer already has open. Dismiss &rarr; never becomes a finding, with a documented reason. The same queue also holds WCAG version-change and pattern-approval requests from the two loops below.<div class="lens-tags"><span class="lens-tag">human approval</span></div></div>
+        </div>
+        <div class="step-desc" style="margin-top:10px">Slack alerts and a real ticket-tracker sink (Jira) are supported in code as opt-in integrations for anyone self-hosting this &mdash; the public free deployment runs on the CSV + email path only, no external accounts needed.</div>
+      </div>
+    </div>
+
   </div>
+</div>
 
-  <h3>Why homeowners choose us</h3>
-  <p>We use family-safe treatments and stand behind every job with a
-     satisfaction guarantee. Our technicians are licensed, insured, and
-     background-checked.</p>
+<div class="zone">
+  <div class="zone-label">Memory: WCAG knowledge base</div>
+  <div class="zone-note">Grounds Analyst and Editor's citations against the real standard instead of the model's unaided claim, and stays current on its own. Runs as its own always-off Cloud Run service (<span class="mono">scan-wcag-poller</span>), woken only by its daily Scheduler tick &mdash; it never runs inside a live scan.</div>
+  <div class="loop-diagram">
+    <div class="loop-node mono">Cloud Scheduler tick, daily</div>
+    <div class="loop-arrow">&rarr;</div>
+    <div class="loop-node mono">Fetch current WCAG version</div>
+    <div class="loop-arrow">&rarr;</div>
+    <div class="loop-node decision mono">Classify: minor or major?</div>
+    <div class="loop-arrow">&rarr;</div>
+    <div class="loop-node mono">Auto-refresh <span style="color:var(--ink-soft)">or</span> escalate to SME Central Review Hub</div>
+  </div>
+  <div class="lens-tags" style="margin-top:14px"><span class="lens-tag">memory / vector search</span><span class="lens-tag">feedback loop: self-heal</span><span class="lens-tag">human approval on structural change</span></div>
+</div>
 
-  <p><a href="services.html">Learn more</a></p>
+<div class="zone">
+  <div class="zone-label">Memory: Analyst/Editor's own judgment</div>
+  <div class="zone-note">Distinct from the knowledge base above: that loop keeps reference material current, this one tunes the pipeline's own behavior from its real history. Calls Gemini Flash via Vertex AI, the same tier reserved for judgment calls elsewhere in this pipeline &mdash; call volume here is low (one call per qualifying cluster, weekly), so a managed API beats maintaining a separate self-hosted model. Runs as a Cloud Run Job (<span class="mono">pattern-miner</span>), not a Service &mdash; woken weekly by its own Scheduler tick, run-to-completion, then exits.</div>
+  <div class="loop-diagram">
+    <div class="loop-node mono">Editor's dismissal history</div>
+    <div class="loop-arrow">&rarr;</div>
+    <div class="loop-node mono">Weekly Scheduler tick</div>
+    <div class="loop-arrow">&rarr;</div>
+    <div class="loop-node mono">Cloud Run Job: Gemini Flash</div>
+    <div class="loop-arrow">&rarr;</div>
+    <div class="loop-node decision mono">Consistent pattern?</div>
+    <div class="loop-arrow">&rarr;</div>
+    <div class="loop-node mono">SME Central Review Hub</div>
+  </div>
+  <div class="step-desc" style="margin-top:10px">Confirmed &rarr; grounds Editor's prompt on every future scan.</div>
+  <div class="lens-tags" style="margin-top:14px"><span class="lens-tag">persistent memory</span><span class="lens-tag">feedback loop: self-improving</span><span class="lens-tag">human approval before judgment changes</span></div>
+</div>
 
-  <h2>What our customers say</h2>
-  <p>"Guardian showed up on time and solved a problem two other companies
-     couldn't. Highly recommend," said a customer in Riverside.</p>
-</main>
+<div class="zone">
+  <div class="zone-label">Resumability</div>
+  <div class="zone-note">Every stage above checkpoints its completion to Firestore as it finishes. A restart, whether a crash or a redeploy, reads the last completed checkpoint and resumes from the next incomplete stage. It never blindly restarts from the top, and never assumes a stage completed just because the job record exists.</div>
+  <div class="lens-tags"><span class="lens-tag">resumability</span><span class="lens-tag">crash-safe by design</span></div>
+</div>
 
-<footer>
-  <p>&copy; 2026 Guardian Pest Control. All rights reserved.</p>
-</footer>
+<div class="zone">
+  <div class="zone-label">Google Cloud infrastructure</div>
+  <div class="infra-grid">
+    <div class="infra-item"><div class="name">Cloud Run</div><div class="role">2 scale-to-zero services (scan-onboarding, scan-wcag-poller) + 1 Job (pattern-miner), least-privilege per service</div></div>
+    <div class="infra-item"><div class="name">Google ADK</div><div class="role">LlmAgent + Runner wraps every real-time Gemini call</div></div>
+    <div class="infra-item"><div class="name">Vertex AI &middot; Gemini</div><div class="role">Flash-lite for volume, Flash for judgment calls</div></div>
+    <div class="infra-item"><div class="name">Firestore</div><div class="role">Job checkpoints, findings, escalations, KB version, learned patterns</div></div>
+    <div class="infra-item"><div class="name">Cloud Storage</div><div class="role">Generated HTML reports</div></div>
+    <div class="infra-item"><div class="name">Cloud Scheduler</div><div class="role">WCAG freshness tick (daily), pattern-miner (weekly)</div></div>
+    <div class="infra-item"><div class="name">Resend</div><div class="role">Emails the report to the address a scan was submitted with</div></div>
+    <div class="infra-item"><div class="name">CSV export</div><div class="role">Default ticket sink &mdash; Jira's importer column format, no tracker account needed</div></div>
+    <div class="infra-item"><div class="name">Playwright</div><div class="role">Headless render, screenshot, computed styles</div></div>
+  </div>
+  <div class="zone-note" style="margin-top:14px">Optional, opt-in for anyone self-hosting this, not required for the public deployment: an access-code gate on the scan form and review queue (Secret Manager), a real Jira sink instead of CSV, and Slack alerts alongside email.</div>
+</div>
+</div>
+
+<footer>MAD Platform &middot; Community Edition, free to use &middot; built during Google's All Things Agentic Hackathon &middot; <a href="https://github.com/pandayv/mad-platform-community" style="color:inherit">github.com/pandayv/mad-platform-community</a></footer>
+</div>
 </body>
 </html>

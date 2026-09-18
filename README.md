@@ -7,31 +7,32 @@ just a report. Free, no account needed.
 
 Originally built for the [All Things Agentic Hackathon](https://allthingsagentichackathon.devpost.com/)
 on Gemini, Google's Agent Development Kit (ADK), and Google Cloud; this is
-the ongoing community fork, running as a free public tool.
+the ongoing community fork, running as a free public tool. The
+architecture has moved on since the hackathon submission — most notably,
+scanning now runs on a separate queue/worker service rather than
+in-process — so this document describes what's actually deployed today,
+not the original submission.
 
 ---
 
 ## Try it live
 
-**[Live scanner](https://scan-onboarding-531805458979.us-central1.run.app):**
+**[Live scanner](https://mad-platform.org):**
 paste in a URL, give an email address to receive the report, and watch it
 scan. No account, no access code, free.
 
-**[Guardian Pest Control](https://pandayv.github.io/mad-platform-community/):**
-a small fictional business site, seeded with real accessibility
-violations, built to give the scanner a consistent, reliable target.
-
-**[Architecture diagram](https://pandayv.github.io/mad-platform-community/architecture.html):**
+**[Architecture diagram](https://pandayv.github.io/mad-platform-community/):**
 the full pipeline, the WCAG auto-heal loop, and the Google Cloud
 infrastructure behind it.
 
 ### Testing it yourself
 
-1. Open the live scanner above and submit a URL. The demo site above
-   works well, or try any real one.
+1. Open the live scanner above and submit any real URL.
 2. Watch the status page track live progress. A multi-page scan usually
    takes one to three minutes, depending on how many pages get selected
-   and real-time model latency.
+   and real-time model latency. If there's a burst of traffic ahead of
+   you, you'll see a queued state first — scans process one at a time per
+   worker instance, and the page tells you it's safe to close the tab.
 3. On the completed report, every confirmed finding is listed with a
    suggested fix and a status. Anything flagged "Awaiting internal
    review" is a low-confidence or critical finding a human hasn't
@@ -66,6 +67,11 @@ what's actually running, not just stated intent.
   model's unverified recollection.
 - Every page gets three parallel checks: rule-based, semantic, and
   multimodal visual check, reasoning over the actual rendered screenshot.
+- Every LLM-returned reference into another list (which finding a
+  verification or fix applies to) is validated against the list it's
+  supposed to index before anything downstream trusts it — an
+  out-of-range or duplicate reference is dropped and logged, never
+  silently misapplied.
 
 ### Fit for purpose
 - Two-tier model selection: `flash-lite` for high-volume calls, `flash`
@@ -83,9 +89,14 @@ what's actually running, not just stated intent.
 - Every irreversible action is idempotent, human-gated, or both; if a
   scan is resumed after interruption, it resumes past what is already
   completed.
+- A scan is marked complete only once its results actually exist and are
+  readable — status and summary are written together, atomically, so
+  there's no window where the two disagree.
 - Least privilege applies at every layer: every part of the system can
   only touch what its job requires, and the customer-facing tool and the
-  internal review tool don't share access at all.
+  internal review tool don't share access at all. The review queue itself
+  fails *closed*: if its access code isn't configured, nobody gets in,
+  not everybody.
 - The crawler refuses to fetch private, internal, or cloud-metadata
   addresses to protect from threats.
 - Two layers of audit trail: Google Cloud's own Audit Logs for
@@ -119,9 +130,9 @@ what's actually running, not just stated intent.
    Jira's importer column format and emails the full report; routes the
    low-confidence or critical minority to a human reviewer instead, who
    can confirm or dismiss.
-6. **Recovers from failure.** A scan interrupted mid-way (crash, redeploy)
-   resumes from its last completed checkpoint rather than starting over or
-   silently duplicating work.
+6. **Recovers from failure.** A scan interrupted mid-way (crash, redeploy,
+   a queue retry) resumes from its last completed checkpoint rather than
+   starting over or silently duplicating work.
 7. **Keeps its own reference material current.** A separate scheduled
    service checks whether the WCAG standard itself has changed,
    auto-refreshing for minor additive updates and routing structural
@@ -151,21 +162,42 @@ scanners, backed by things actually checked, not marketing copy:
 
 - **AI:** Gemini via Vertex AI for every call, real-time or batch
   (`gemini-3.5-flash-lite` for high-volume calls, `gemini-3.7-flash` for
-  judgment calls, including the low-volume weekly pattern-mining job)
+  judgment calls, `gemini-embedding-001` for RAG retrieval)
 - **Agent framework:** Google Agent Development Kit (ADK)
-- **Compute:** Cloud Run, two scale-to-zero services (`scan-onboarding`,
-  `scan-wcag-poller`) split by trigger type and resource profile, plus
-  one lightweight Cloud Run Job (`pattern-miner`) for the weekly batch
-  miner
+- **Compute:** Cloud Run, three scale-to-zero services split by trigger
+  type and resource profile —
+  - `scan-onboarding`: the public web app. Thin and cheap (1Gi memory,
+    concurrency 20, no browser automation), since it only ever enqueues
+    work, never runs it.
+  - `scan-worker`: not publicly reachable, only Cloud Tasks' dedicated
+    invoker identity can call it. Runs the actual pipeline (Playwright,
+    Gemini, one scan at a time per instance — 2Gi memory,
+    `containerConcurrency=1`).
+  - `scan-wcag-poller`: not publicly reachable either, ticked daily by
+    Cloud Scheduler to run the WCAG freshness check.
+
+  plus one lightweight Cloud Run Job (`pattern-miner`) for the weekly
+  dismissal-pattern miner.
+- **Queueing:** Cloud Tasks (`scan-queue`) sits between `scan-onboarding`
+  and `scan-worker` — submitting a scan enqueues a task rather than
+  running the pipeline in the request handler, so a burst of traffic
+  queues instead of falling over, and a scan that dies mid-run gets
+  retried without the visitor having to resubmit anything.
 - **State:** Firestore, for job checkpoints, findings, escalation queue,
-  WCAG knowledge-base embeddings, and confirmed learned patterns
+  WCAG knowledge-base embeddings, confirmed learned patterns, and
+  anti-abuse quota counters (with a TTL policy on the short-lived ones)
 - **Storage:** Cloud Storage, for generated reports
 - **Scheduling:** Cloud Scheduler, driving the WCAG freshness check
   (daily) and the dismissal-pattern miner (weekly)
 - **Browser automation:** Playwright, for headless rendering, screenshots,
-  and computed-style extraction for real contrast-ratio checking
+  and computed-style extraction for real contrast-ratio checking — this
+  is the one dependency that lives only in `scan-worker`'s image
 - **Web:** FastAPI, powering the scan-submission UI, status API, and
   marketing/FAQ/legal pages
+- **Anti-abuse:** Cloudflare Turnstile (opt-in, off unless a site key is
+  configured) plus disposable-email filtering and per-email/per-IP/global
+  monthly quota, checked and reserved inside a single Firestore
+  transaction so concurrent submissions can't all slip through at once
 - **Ticketing:** CSV export by default, in Jira's importer column format,
   so confirmed findings drop straight into a real tracker with no account
   needed; a real `JiraIssueSink` also exists in code as an opt-in for
@@ -175,9 +207,12 @@ scanners, backed by things actually checked, not marketing copy:
   escalation, a summary on completion) exists in code as an opt-in,
   neither is required
 - **Security:** the crawler refuses to fetch private/internal network
-  addresses; an access-code gate (Secret Manager) on the scan form and
-  review queue exists in code as an opt-in for anyone who wants to run a
-  private instance instead of a public one
+  addresses; an access-code gate (Secret Manager) on the SME review queue
+  exists and fails *closed* if unconfigured, for anyone who wants to run
+  a private instance instead of a public one
+- **Testing:** pytest, 160+ tests covering the pure logic, the LLM-output
+  validation boundary, and the FastAPI routes that don't need live GCP —
+  see [Running the tests](#running-the-tests)
 
 ## Setting this up yourself
 
@@ -185,23 +220,20 @@ scanners, backed by things actually checked, not marketing copy:
 
 - A Google Cloud project with billing enabled.
 - The `gcloud` CLI, installed and authenticated (`gcloud auth login`).
-- Python 3.10+ locally (the ADK toolchain needs it).
+- Python 3.13+ locally, matching the version the container images run.
 - Optional, for real email delivery: a free [Resend](https://resend.com)
   account and API key. Without it, reports still generate and display in
   the browser; only the emailed copy is skipped.
-- Optional, for a private instance instead of a public one: an access
-  code (Secret Manager), and/or a real Jira Cloud account and Slack
-  workspace instead of the default CSV export.
+- Optional, for bot mitigation on the public scan form: a
+  [Cloudflare Turnstile](https://developers.cloudflare.com/turnstile/)
+  site key and secret. Without them, the widget simply doesn't render —
+  it's not required to run.
+- Optional, for a private instance instead of a public one: a review
+  access code (Secret Manager), and/or a real Jira Cloud account and
+  Slack workspace instead of the default CSV export.
 
 **IMPORTANT:** Replace `YOUR_PROJECT_ID` below with your actual GCP project
 ID, the only value you need to choose here.
-
-`GOOGLE_CLOUD_PROJECT` and `GCS_BUCKET_NAME` aren't separate inputs, they're
-derived from it automatically on the next two lines, but they're just as
-required: the app's Firestore and Storage clients read them directly and
-each falls back to a hardcoded project/bucket if unset, so skipping these
-lines means every write silently targets the wrong place instead of failing
-loudly, including when testing locally in step 5, not just once deployed.
 
 ```bash
 export PROJECT_ID=YOUR_PROJECT_ID
@@ -209,6 +241,13 @@ export GOOGLE_CLOUD_PROJECT="$PROJECT_ID"
 export GCS_BUCKET_NAME="${PROJECT_ID}-reports"
 gcloud config set project "$PROJECT_ID"
 ```
+
+Every value this codebase actually reads from the environment lives in
+`mad_platform/config.py`, with no fallback default for anything that
+names a cloud resource — an unset variable fails loudly at startup
+instead of silently pointing at the wrong project. That module is the
+source of truth for exact variable names if this guide ever drifts from
+the code again.
 
 ### 1. Clone and set up the local environment
 
@@ -226,7 +265,7 @@ playwright install --with-deps chromium
 gcloud services enable \
   run.googleapis.com firestore.googleapis.com secretmanager.googleapis.com \
   storage.googleapis.com aiplatform.googleapis.com cloudscheduler.googleapis.com \
-  cloudbuild.googleapis.com
+  cloudtasks.googleapis.com cloudbuild.googleapis.com
 ```
 
 ### 3. Create Firestore and a Cloud Storage bucket
@@ -238,9 +277,9 @@ gcloud storage buckets create "gs://${PROJECT_ID}-reports" --location=us-central
 ```
 
 The Firestore database name is non-default (`scan-firestore`) on purpose,
-so every `firestore.Client(...)` call in this codebase passes
-`database="scan-firestore"` explicitly. Easy to forget if you're used to
-the client library's default; connects to an empty database if missed.
+so every Firestore client in this codebase passes `database="scan-firestore"`
+explicitly. Easy to forget if you're used to the client library's default;
+connects to an empty database if missed.
 
 ### 4. Authenticate locally and confirm Vertex AI works
 
@@ -262,6 +301,7 @@ there. This is independent of which region Cloud Run itself deploys to.
 ### 5. Test the pipeline locally, before deploying anything
 
 ```bash
+export MAD_APP_BASE_URL="http://localhost:8000"
 python run_scan.py https://example.com
 ```
 
@@ -282,7 +322,50 @@ gcloud projects add-iam-policy-binding "$PROJECT_ID" \
   --role="roles/artifactregistry.writer"
 ```
 
-### 7. Deploy `scan-onboarding` (the public app)
+### 7. Deploy `scan-worker` and its `scan-queue` (deploy this before `scan-onboarding`)
+
+`scan-onboarding` enqueues into `scan-queue` and needs to know
+`scan-worker`'s URL and invoker identity at deploy time, so this has to
+exist first.
+
+```bash
+gcloud iam service-accounts create scan-worker-sa
+gcloud iam service-accounts create scan-queue-invoker-sa
+SA_WORKER="scan-worker-sa@${PROJECT_ID}.iam.gserviceaccount.com"
+SA_QUEUE_INVOKER="scan-queue-invoker-sa@${PROJECT_ID}.iam.gserviceaccount.com"
+
+gcloud projects add-iam-policy-binding "$PROJECT_ID" \
+  --member="serviceAccount:${SA_WORKER}" --role="roles/datastore.user"
+gcloud projects add-iam-policy-binding "$PROJECT_ID" \
+  --member="serviceAccount:${SA_WORKER}" --role="roles/aiplatform.user"
+gcloud storage buckets add-iam-policy-binding "gs://${PROJECT_ID}-reports" \
+  --member="serviceAccount:${SA_WORKER}" --role="roles/storage.objectAdmin"
+
+gcloud builds submit --config=cloudbuild.worker.yaml --region=us-central1 \
+  --substitutions=_IMAGE="us-central1-docker.pkg.dev/${PROJECT_ID}/mad-platform/scan-worker:latest" .
+gcloud run deploy scan-worker \
+  --image="us-central1-docker.pkg.dev/${PROJECT_ID}/mad-platform/scan-worker:latest" \
+  --region=us-central1 --service-account="$SA_WORKER" \
+  --memory=2Gi --cpu=1 --no-cpu-throttling --concurrency=1 --max-instances=5 \
+  --set-env-vars=GCS_BUCKET_NAME="${PROJECT_ID}-reports",GOOGLE_CLOUD_PROJECT="${PROJECT_ID}",MAD_APP_BASE_URL="https://YOUR-DOMAIN-OR-CLOUD-RUN-URL" \
+  --no-allow-unauthenticated
+
+gcloud run services add-iam-policy-binding scan-worker --region=us-central1 \
+  --member="serviceAccount:${SA_QUEUE_INVOKER}" --role="roles/run.invoker"
+
+gcloud tasks queues create scan-queue --location=us-central1 \
+  --max-concurrent-dispatches=5 --max-attempts=3
+
+WORKER_URL=$(gcloud run services describe scan-worker --region=us-central1 --format='value(status.url)')
+echo "Set SCAN_WORKER_URL=${WORKER_URL} for the scan-onboarding deploy below."
+```
+
+`MAD_APP_BASE_URL` is the public URL report and review links get built
+from — set it to `scan-onboarding`'s URL once you know it (you can
+redeploy this service to fix it up after step 8, it's read at request
+time via `mad_platform/config.py`, not baked in).
+
+### 8. Deploy `scan-onboarding` (the public app)
 
 ```bash
 gcloud iam service-accounts create scan-onboarding-sa
@@ -290,29 +373,32 @@ SA_ONBOARDING="scan-onboarding-sa@${PROJECT_ID}.iam.gserviceaccount.com"
 
 gcloud projects add-iam-policy-binding "$PROJECT_ID" \
   --member="serviceAccount:${SA_ONBOARDING}" --role="roles/datastore.user"
-gcloud projects add-iam-policy-binding "$PROJECT_ID" \
-  --member="serviceAccount:${SA_ONBOARDING}" --role="roles/aiplatform.user"
 gcloud storage buckets add-iam-policy-binding "gs://${PROJECT_ID}-reports" \
-  --member="serviceAccount:${SA_ONBOARDING}" --role="roles/storage.objectAdmin"
+  --member="serviceAccount:${SA_ONBOARDING}" --role="roles/storage.objectViewer"
+# Cloud Tasks needs the enqueuing identity to be allowed to "act as" the
+# invoker service account it puts in each task's OIDC config:
+gcloud iam service-accounts add-iam-policy-binding "$SA_QUEUE_INVOKER" \
+  --member="serviceAccount:${SA_ONBOARDING}" --role="roles/iam.serviceAccountUser"
 
 gcloud builds submit --tag="us-central1-docker.pkg.dev/${PROJECT_ID}/mad-platform/scan-onboarding" \
   --region=us-central1 .
 gcloud run deploy scan-onboarding \
   --image="us-central1-docker.pkg.dev/${PROJECT_ID}/mad-platform/scan-onboarding:latest" \
   --region=us-central1 --service-account="$SA_ONBOARDING" \
-  --no-cpu-throttling --memory=1Gi --concurrency=4 --max-instances=3 --min-instances=0 \
-  --set-env-vars=GCS_BUCKET_NAME="${PROJECT_ID}-reports",GOOGLE_CLOUD_PROJECT="${PROJECT_ID}" \
+  --no-cpu-throttling --memory=1Gi --concurrency=20 --max-instances=3 --min-instances=0 \
+  --set-env-vars=GCS_BUCKET_NAME="${PROJECT_ID}-reports",GOOGLE_CLOUD_PROJECT="${PROJECT_ID}",MAD_APP_BASE_URL="https://YOUR-DOMAIN-OR-CLOUD-RUN-URL",SCAN_WORKER_URL="${WORKER_URL}",SCAN_QUEUE_INVOKER_SA="${SA_QUEUE_INVOKER}" \
   --allow-unauthenticated
 ```
 
-No access code is required by default (`MAD_ACCESS_CODE` /
-`MAD_REVIEW_CODE` unset) — this deploys a fully public, free instance,
-matching the live one above. If you want a private instance instead, set
-those two as Secret Manager secrets and pass them with `--set-secrets`
-(see the codebase's `_ACCESS_CODE` / `_REVIEW_CODE` in
-`mad_platform/web/app.py` for exact env var names).
+No review access code is required by default (`MAD_REVIEW_CODE` unset) —
+this deploys a fully public, free instance, matching the live one above,
+and the SME review queue simply refuses everyone until you configure one
+(it fails *closed*, not open). If you want a private review queue, set
+`MAD_REVIEW_CODE` as a Secret Manager secret and pass it with
+`--set-secrets` (see `mad_platform/config.py`'s `review_code()` for the
+exact variable name).
 
-### 8. Deploy `scan-wcag-poller` and its daily-freshness Scheduler trigger
+### 9. Deploy `scan-wcag-poller` and its daily-freshness Scheduler trigger
 
 Not public. Only a dedicated invoker identity, not the poller's own
 account, can call it, so a compromised poller can't grant itself more
@@ -346,7 +432,7 @@ gcloud scheduler jobs create http scan-wcag-poller-tick \
   --http-method=POST --oidc-service-account-email="$SA_SCHEDULER"
 ```
 
-### 9. Deploy the pattern-miner (a Cloud Run Job, not a Service)
+### 10. Deploy the pattern-miner (a Cloud Run Job, not a Service)
 
 Run-to-completion rather than request-driven, since this is a periodic
 batch job with no live-request latency to protect. Calls Gemini Flash via
@@ -384,13 +470,21 @@ gcloud scheduler jobs create http pattern-miner-tick \
 To see it run immediately rather than waiting for the schedule:
 `gcloud run jobs execute pattern-miner --region=us-central1 --wait`.
 
-### 10. Optional: real email delivery, and swapping CSV for Jira/Slack
+### 11. Optional: real email delivery, bot mitigation, and swapping CSV for Jira/Slack
 
 Email, via [Resend](https://resend.com) — without this, reports still
 generate and display in the browser, only the emailed copy is skipped.
 
 ```bash
 printf '%s' "YOUR_RESEND_API_KEY" | gcloud secrets create resend-api-key --data-file=-
+```
+
+Cloudflare Turnstile, to put a bot challenge in front of the scan form —
+without this, the form simply has no challenge:
+
+```bash
+printf '%s' "YOUR_TURNSTILE_SECRET_KEY" | gcloud secrets create turnstile-secret-key --data-file=-
+# TURNSTILE_SITE_KEY is not secret -- it's fine as a plain env var.
 ```
 
 Jira, for real ticket filing instead of the default CSV export. Create an
@@ -412,50 +506,88 @@ printf '%s' "https://hooks.slack.com/services/YOUR/WEBHOOK/URL" | \
   gcloud secrets create slack-webhook-url --data-file=-
 ```
 
-Grant access and redeploy `scan-onboarding` with the new secrets:
+Grant access and redeploy `scan-onboarding` with the new secrets (Jira
+and Slack are only ever called from `scan-worker`, since that's where the
+pipeline actually runs — grant those two secrets to `scan-worker-sa`
+instead):
 
 ```bash
-for secret in resend-api-key jira-url jira-email jira-api-token jira-project-key slack-webhook-url; do
+for secret in resend-api-key turnstile-secret-key; do
   gcloud secrets add-iam-policy-binding "$secret" \
     --member="serviceAccount:${SA_ONBOARDING}" --role="roles/secretmanager.secretAccessor"
+done
+for secret in resend-api-key jira-url jira-email jira-api-token jira-project-key slack-webhook-url; do
+  gcloud secrets add-iam-policy-binding "$secret" \
+    --member="serviceAccount:${SA_WORKER}" --role="roles/secretmanager.secretAccessor"
 done
 
 gcloud run deploy scan-onboarding \
   --image="us-central1-docker.pkg.dev/${PROJECT_ID}/mad-platform/scan-onboarding:latest" \
-  --region=us-central1 --service-account="$SA_ONBOARDING" \
-  --no-cpu-throttling --memory=1Gi --concurrency=4 --max-instances=3 --min-instances=0 \
-  --set-env-vars=GCS_BUCKET_NAME="${PROJECT_ID}-reports",GOOGLE_CLOUD_PROJECT="${PROJECT_ID}" \
-  --set-secrets=RESEND_API_KEY=resend-api-key:latest,JIRA_URL=jira-url:latest,JIRA_EMAIL=jira-email:latest,JIRA_API_TOKEN=jira-api-token:latest,JIRA_PROJECT_KEY=jira-project-key:latest,SLACK_WEBHOOK_URL=slack-webhook-url:latest \
-  --allow-unauthenticated
+  --region=us-central1 --set-secrets=RESEND_API_KEY=resend-api-key:latest,TURNSTILE_SECRET_KEY=turnstile-secret-key:latest \
+  --set-env-vars=TURNSTILE_SITE_KEY=YOUR_TURNSTILE_SITE_KEY
+
+gcloud run deploy scan-worker \
+  --image="us-central1-docker.pkg.dev/${PROJECT_ID}/mad-platform/scan-worker:latest" \
+  --region=us-central1 --set-secrets=RESEND_API_KEY=resend-api-key:latest,JIRA_URL=jira-url:latest,JIRA_EMAIL=jira-email:latest,JIRA_API_TOKEN=jira-api-token:latest,JIRA_PROJECT_KEY=jira-project-key:latest,SLACK_WEBHOOK_URL=slack-webhook-url:latest
 ```
 
-### 11. Verify
+### 12. Verify
 
 ```bash
 gcloud run services describe scan-onboarding --region=us-central1 --format='value(status.url)'
 ```
 
-Open that URL, submit a real site to scan, and confirm it completes.
+Open that URL, submit a real site to scan, and confirm it completes —
+watch the status page move from "queued" (if anything else is ahead of
+it) to "in progress" to a finished report.
+
+## Running the tests
+
+```bash
+pip install -r requirements-dev.txt
+python -m pytest
+```
+
+No GCP credentials, no Firestore emulator, and no network access are
+needed — that's deliberate. Every module in this codebase constructs its
+GCP clients lazily (see `mad_platform/config.py` and the accessor
+functions in `mad_platform/state/`, `mad_platform/tools/`), so importing
+and testing the pure logic, the LLM-output validation boundary, and the
+routes that don't need a live backend costs nothing and needs nothing.
+What isn't covered here — real Firestore transaction behavior under
+contention, the actual Cloud Tasks dispatch, live model calls — is called
+out explicitly in `CODE_REVIEW_FIXES.md`.
 
 ## Project structure
 
 ```
 mad_platform/
   agents/        # Orchestrator, Analyst, Editor, Reporter, Action Agent,
-                  # WCAG auto-heal, Pattern Miner (persistent memory)
+                  # WCAG auto-heal, Pattern Miner (persistent memory),
+                  # LLM-output index validation (shared trust boundary)
   tools/         # Crawler, rule checks, AI checks, ADK client, RAG,
-                  # WCAG version fetch, issue sink, Slack/email notify
-  state/         # Firestore + Cloud Storage clients
-  web/           # Scan-submission UI, status page, SME review queue,
-                  # the WCAG-poller HTTP entrypoint, shared theme/charts
+                  # WCAG version fetch, issue sink, Slack/email notify,
+                  # anti-abuse pre-filters, SSRF-safe URL guard
+  state/         # Firestore + Cloud Storage clients (lazy singletons)
+  web/           # scan-onboarding's app (submission UI, status page, SME
+                  # review queue), scan-worker's app (the pipeline's push
+                  # target), scan-wcag-poller's app, shared theme/charts
   data/          # Curated WCAG success-criteria corpus
-docs/            # Demo site + self-hosted architecture diagram (GitHub Pages)
+  config.py      # The one place required environment configuration is
+                  # read -- no defaults for anything naming a cloud
+                  # resource, values read lazily so import stays
+                  # side-effect-free
+docs/            # Self-hosted architecture diagram (GitHub Pages)
+tests/           # pytest suite -- pure logic, LLM-boundary validation,
+                  # and routes that don't need live GCP (see above)
 run_scan.py                    # CLI entry point for a one-time scan
 review_escalations.py          # SME review queue CLI (web UI is the primary surface)
 check_wcag_version.py          # Manual trigger for the WCAG freshness check
 mine_patterns.py               # Manual trigger for the pattern miner
-Dockerfile / Dockerfile.wcag_poller / Dockerfile.pattern_miner
-cloudbuild.wcag_poller.yaml / cloudbuild.pattern_miner.yaml
+Dockerfile                     # scan-onboarding -- no Playwright, thin and cheap
+Dockerfile.worker               # scan-worker -- the one image with Playwright/Chromium
+Dockerfile.wcag_poller / Dockerfile.pattern_miner
+cloudbuild.worker.yaml / cloudbuild.wcag_poller.yaml / cloudbuild.pattern_miner.yaml
 ```
 
 ## Support this project
@@ -469,7 +601,8 @@ report.
 ## Scalability & roadmap
 
 What's built today is the product layer: check a site's accessibility
-on-demand, one-time, no registration. The natural next layer is
+on-demand, one-time, no registration, running behind a real queue so
+traffic bursts degrade to a wait, not a failure. The natural next layer is
 registering a site for *recurring* monitoring instead of a single scan,
 and it's a smaller step than it sounds, since the scheduling and
 self-improvement infrastructure it would reuse is already running in
@@ -483,6 +616,17 @@ making a recurring scan's ticket-filing idempotent across separate runs
 deciding how the SME review queue should weigh a site's own review
 history, so a pattern a reviewer already confirmed on that site doesn't
 re-escalate identically on every future run.
+
+An internal code-review pass is also in progress: `CODE_REVIEW_FINDINGS.md`
+and `CODE_REVIEW_FIXES.md` (both gitignored, kept locally) track hardening
+work beyond new features — the first backend pass closed a
+same-hackathon-project GCP config fallback, made every module's GCP
+clients lazy so an actual test suite could exist, closed a race between a
+scan being marked complete and its summary being written, added bounds
+checking on every LLM-returned index, fixed an escalation idempotency-key
+collision between different users' scans, made the anti-abuse quota check
+a real Firestore transaction, and closed a fail-open bug in the SME
+review queue's access gate.
 
 ## Built during the hackathon submission window
 
