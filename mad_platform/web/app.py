@@ -604,7 +604,7 @@ def _render_form(error: str | None = None, device_verified: bool = False) -> str
 
 <section class="section" id="how-it-works">
   <div class="section-head">
-    <div class="section-eyebrow"><span class="line"></span><span>Process</span><span class="line"></span></div>
+    <div class="section-eyebrow"><span class="line"></span><span>The process</span><span class="line"></span></div>
     <h2>How it works</h2>
     <p>Paste your URL. No account, no setup<sup>1</sup>, no catch.</p>
   </div>
@@ -625,8 +625,8 @@ def _render_form(error: str | None = None, device_verified: bool = False) -> str
 
 <section class="section" id="under-the-hood">
   <div class="section-head">
-    <div class="section-eyebrow"><span class="line"></span><span>Under the hood</span><span class="line"></span></div>
-    <h2>Why the report holds up</h2>
+    <div class="section-eyebrow"><span class="line"></span><span>The engine</span><span class="line"></span></div>
+    <h2>Under the hood</h2>
     <p>Four specialized agents, not one model guessing.</p>
   </div>
   <div class="pipeline-flow">
@@ -1819,8 +1819,8 @@ def _render_feedback_page(
       <form method="post" action="/feedback">
         <input type="hidden" name="job_id" value="{html.escape(job_id)}">
         <div class="scan-field">
-          <label class="f-label" for="feedback-url">Which site is this about? (optional)</label>
-          <input id="feedback-url" type="text" name="url" placeholder="yoursite.com" value="{html.escape(url)}">
+          <label class="f-label" for="feedback-url">Which site is this about?</label>
+          <input id="feedback-url" type="text" name="url" placeholder="Enter your website URL" value="{html.escape(url)}">
         </div>
         <fieldset class="rating-field">
           <legend class="f-label">How helpful was this?</legend>
@@ -1828,7 +1828,7 @@ def _render_feedback_page(
         </fieldset>
         <div class="scan-field">
           <div style="display:flex;justify-content:space-between;align-items:baseline">
-            <label class="f-label" for="comment" style="margin-bottom:0">Comments (optional)</label>
+            <label class="f-label" for="comment" style="margin-bottom:0">Comments</label>
             <span id="comment-count" class="mono" style="font-size:11px;color:var(--muted)">0 / {_MAX_FEEDBACK_COMMENT}</span>
           </div>
           <textarea id="comment" name="comment" rows="7" maxlength="{_MAX_FEEDBACK_COMMENT}" placeholder="What worked, what didn't, anything we should fix" style="margin-top:6px">{html.escape(comment)}</textarea>
@@ -1838,7 +1838,7 @@ def _render_feedback_page(
           OK to quote this publicly as a testimonial
         </label>
         <div class="scan-field">
-          <label class="f-label" for="contact">Name or contact, if we can quote you (optional)</label>
+          <label class="f-label" for="contact">Name</label>
           <input id="contact" type="text" name="contact" maxlength="{_MAX_FEEDBACK_CONTACT}" placeholder="e.g. Jordan, owner of a small business" value="{html.escape(contact)}">
         </div>
         <input type="text" name="website" tabindex="-1" autocomplete="off" aria-hidden="true" style="position:absolute;left:-9999px;width:1px;height:1px;opacity:0">
