@@ -6,51 +6,44 @@
 
 Most small businesses have no idea their website is a lawsuit waiting to
 happen. Accessibility lawsuits are real, growing, and rarely preceded by
-a warning — usually the first notice is a demand letter. A proper audit
-costs money and takes weeks most owners don't have. The free scanners
-that exist bury a real problem under a pile of false positives, then
+a warning. Usually the first sign is a real demand letter. 
+
+A full audit costs money and takes weeks most owners don't have. The free scanners
+that exist bury a real problem under a pile of false positives, and
 leave you holding a report with no idea what to actually fix first.
 
-**MAD Platform closes that gap.** Point it at a URL and it finds the real
-issues, checks its own work before it shows you anything, explains what
-matters most in plain language, and hands you a fix for each one — while
-sending anything it's genuinely unsure about to a human instead of
-guessing. Free. No account.
+**MAD Platform closes that gap.** Point it at a URL and a team of agents finds the real
+issues grounded in current standard guidelines, checks its own work before showing you anything, explains what
+matters most in plain language, and hands you a fix for each one. Anything critical or uncertain is sent for a human review instead of
+guessing. 100% Free. 
 
 ![MAD Platform homepage: hero scan form, community-edition badge](assets/screenshot-homepage-hero.png)
 
-Built solo for the [All Things Agentic Hackathon](https://allthingsagentichackathon.devpost.com/)
+Originally built for the [All Things Agentic Hackathon](https://allthingsagentichackathon.devpost.com/)
 on Gemini, Google's Agent Development Kit (ADK), and Google Cloud. This
-is the ongoing community fork: same free public tool, an architecture
-that's moved on since the submission (scanning now runs on its own
-queue/worker service instead of in the request handler), and a README
-that describes what's actually deployed today, not what shipped that
-weekend.
+is the ongoing community fork: modified from a managed platform to a self-serving free community tool. 
 
 ---
 
 ## Try it
 
-**[mad-platform.org](https://mad-platform.org)** — paste in a URL, give
-an email address for the report, watch it scan.
+**[mad-platform.org](https://mad-platform.org)** — Learn more or try it directly here. Paste in a URL, and watch it scan, and send a valuable report with findings to your email. 
 
 **[Architecture diagram](https://pandayv.github.io/mad-platform-community/):**
 the full pipeline and the Google Cloud infrastructure behind it.
 
 ### What to expect
 
-1. Submit any real URL on the website above.
+1. Submit your website or a specific page URL on the website above.
 2. Watch the status page track live progress. A multi-page scan usually
    takes one to three minutes. If there's a burst of traffic ahead of
    you, you'll see a queued state first — scans process one at a time per
    worker instance, and the page tells you it's safe to close the tab.
 3. On the completed report, every confirmed finding is listed with a
    suggested fix and a status. Anything flagged "Awaiting internal
-   review" is a low-confidence or critical finding a human hasn't
-   confirmed yet.
-4. The report and a CSV of confirmed findings (in Jira's importer column
-   format, so it drops straight into a real ticket tracker if you have
-   one) get emailed to the address the scan was submitted with.
+   review" is a low-confidence or critical finding a human needs to manually review. 
+4. The report of confirmed findings get emailed to your email address. A CSV report is also provided in Jira's importer column
+   format, so you can use into a real ticket tracker (Jira or similar) if your team has one. 
 
 ## What it does
 
