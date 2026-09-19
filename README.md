@@ -4,28 +4,35 @@
 [![Forks](https://img.shields.io/github/forks/pandayv/mad-platform-community?style=flat)](https://github.com/pandayv/mad-platform-community/forks)
 [![License: AGPL v3](https://img.shields.io/badge/License-AGPL%20v3-blue.svg)](LICENSE)
 
-**Multi-Agent Defense Platform, for accessibility compliance.** A free tool
-that scans a website for accessibility problems, checks its own findings
-before showing them to you, and gives you a concrete fix for each one, not
-just a report. No account needed.
+Most small businesses have no idea their website is a lawsuit waiting to
+happen. Accessibility lawsuits are real, growing, and rarely preceded by
+a warning — usually the first notice is a demand letter. A proper audit
+costs money and takes weeks most owners don't have. The free scanners
+that exist bury a real problem under a pile of false positives, then
+leave you holding a report with no idea what to actually fix first.
 
-Originally built for the [All Things Agentic Hackathon](https://allthingsagentichackathon.devpost.com/)
-on Gemini, Google's Agent Development Kit (ADK), and Google Cloud; this is
-the ongoing community fork, running as a free public tool. The
-architecture has moved on since the hackathon submission — most notably,
-scanning now runs on a separate queue/worker service rather than
-in-process — so this document describes what's actually deployed today,
-not the original submission.
+**MAD Platform closes that gap.** Point it at a URL and it finds the real
+issues, checks its own work before it shows you anything, explains what
+matters most in plain language, and hands you a fix for each one — while
+sending anything it's genuinely unsure about to a human instead of
+guessing. Free. No account.
 
 ![MAD Platform homepage: hero scan form, community-edition badge](assets/screenshot-homepage-hero.png)
+
+Built solo for the [All Things Agentic Hackathon](https://allthingsagentichackathon.devpost.com/)
+on Gemini, Google's Agent Development Kit (ADK), and Google Cloud. This
+is the ongoing community fork: same free public tool, an architecture
+that's moved on since the submission (scanning now runs on its own
+queue/worker service instead of in the request handler), and a README
+that describes what's actually deployed today, not what shipped that
+weekend.
 
 ---
 
 ## Try it
 
-**[mad-platform.org](https://mad-platform.org)** is the public-facing
-website and our main product: paste in a URL, give an email address to
-receive the report, and watch it scan. No account, no access code, free.
+**[mad-platform.org](https://mad-platform.org)** — paste in a URL, give
+an email address for the report, watch it scan.
 
 **[Architecture diagram](https://pandayv.github.io/mad-platform-community/):**
 the full pipeline and the Google Cloud infrastructure behind it.
@@ -45,46 +52,31 @@ the full pipeline and the Google Cloud infrastructure behind it.
    format, so it drops straight into a real ticket tracker if you have
    one) get emailed to the address the scan was submitted with.
 
-## The problem
-
-Website-accessibility lawsuits (ADA-related, in the US) are a real and
-growing risk for small businesses, most of whom have no practical way to
-know they're exposed. Manual accessibility audits are expensive and slow.
-Automated scanners exist, but they're noisy (full of false positives a
-non-technical business owner can't triage), and a report alone doesn't fix
-anything; someone still has to turn it into work that gets done.
-
-MAD Platform removes that blind spot: point it at a URL, and it finds real
-issues, checks its own work before trusting it, explains what matters most
-in plain language, and hands you the confirmed ones ready to act on,
-while routing the genuinely uncertain ones to a human instead of guessing.
-
 ## What it does
 
-1. **Scans a site.** Decides which pages matter most on its own (home,
-   contact, forms), then checks them with both deterministic rule checks
-   (contrast, missing alt text, heading structure, form labels, ARIA
-   misuse, tab order) and AI-assisted review for what rules can't judge,
+1. **Picks its own targets.** Reads the site's own nav and decides which
+   pages carry real risk — home, contact, forms — rather than crawling
+   everything.
+2. **Checks each page two ways.** Deterministic rules for what has a
+   right answer (contrast, missing alt text, heading structure, form
+   labels, ARIA misuse, tab order), AI-assisted review for what doesn't,
    like whether alt text is actually descriptive.
-2. **Verifies its own findings.** Every flag is independently
-   double-checked before it's trusted; false positives get dismissed with
-   a documented reason, real findings get a confidence score. Anything
-   still uncertain goes to a human reviewer instead of guessing.
-3. **Ranks by real-world risk**, not raw technical severity: WCAG
-   conformance level, how often that violation type shows up in real
-   accessibility litigation, and estimated user impact.
-4. **Produces an actionable report:** a styled, self-contained HTML
-   report with an overall score, severity breakdown, plain-English
-   executive summary, and a concrete suggested fix per finding.
-5. **Takes real action.** Exports every confirmed finding as a CSV in
-   Jira's importer column format and emails the full report.
-6. **Recovers from failure.** A scan interrupted mid-way (crash, redeploy,
-   a queue retry) resumes from its last completed checkpoint rather than
-   starting over or silently duplicating work.
-7. **Keeps its WCAG reference current.** Checks whether the accessibility
-   standard itself has changed, on a schedule.
-8. **Asks how it did.** A short, open feedback form (star rating,
-   comment, optional testimonial opt-in) reachable from the completed
+3. **Verifies before it trusts itself.** Every flag gets independently
+   re-checked against the evidence. A false positive is dismissed with a
+   documented reason; a real finding gets a confidence score.
+4. **Ranks by what actually matters** — WCAG conformance level, how often
+   that violation type shows up in real litigation, estimated user
+   impact — not raw technical severity.
+5. **Writes the report.** One styled HTML page: overall score, severity
+   breakdown, a plain-English summary, a concrete fix per finding.
+6. **Acts on it.** Exports every confirmed finding as a CSV in Jira's
+   importer format and emails the full report — no ticket-tracker account
+   needed to use either.
+7. **Survives getting interrupted.** A crash or a redeploy mid-scan
+   resumes from the last completed checkpoint, not from zero.
+8. **Keeps its own reference current**, checking on a schedule whether
+   the WCAG standard itself has changed.
+9. **Asks how it did**, with a short feedback form reachable from the
    scan, the report, the report email, and the FAQ alike.
 
 ## What a scan looks like
@@ -600,23 +592,25 @@ cloudbuild.worker.yaml / cloudbuild.wcag_poller.yaml / cloudbuild.pattern_miner.
 
 ## Support this project
 
-MAD Platform Community is free, with no ads and no paywall on the actual
-scan. 
-You can support the project at
-[buymeacoffee.com/madplatform](https://buymeacoffee.com/madplatform) — a
-link to the same page is in the site footer.
+No ads, no paywall on the scan itself — that's a deliberate choice, not
+a free trial. If it saved you the cost of an audit, [a tip helps cover
+what it costs to run](https://buymeacoffee.com/madplatform); the same
+link is in the site footer.
 
 ## License
 
 [GNU Affero General Public License v3.0](LICENSE) (AGPL-3.0).
 
-AGPL rather than MIT or Apache-2.0 because this is a network service, and
-AGPL carries the obligation across that boundary: anyone who runs a
-modified version of this code as a hosted service has to make their
-source available to its users, not just to people they distribute a
-binary to.
+AGPL, not MIT or Apache-2.0, because this is a network service: AGPL is
+the license that carries the obligation across that boundary, so a
+modified version run as a hosted service still has to make its source
+available to the people using it, not just to whoever it's handed to as
+a binary.
 
-## Built during the hackathon submission window
+## Built during a hackathon, kept alive on purpose
 
-Solo build by Vipul Panday, drawing on a professional background in risk
-management and compliance. Now maintained as a free community edition.
+Solo build by Vipul Panday, on a professional background in risk
+management and compliance — the same lens the whole project runs on: a
+free scan beats an expensive surprise. Now maintained as a free
+community edition, for anyone who wants to fork it, run it, or just use
+the one already running.

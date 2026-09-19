@@ -194,7 +194,7 @@ footer { margin-top: 24px; font-size: 12.5px; color: var(--ink-soft); font-famil
 
 <figure>
 <div class="diagram-frame">
-<svg viewBox="0 0 1260 660" role="img" aria-label="Three deployables. scan-onboarding, the always-on public Cloud Run service, runs the per-scan pipeline: a web form feeds Orchestrator, which fans out to Analyst's three parallel checks, merges into Editor for independent verification (with one capped retry back to Analyst), then Reporter ranks and drafts, then a route step either auto-exports a CSV of confirmed findings plus an emailed report, or sends low-confidence and critical findings to an SME review queue whose confirmations feed the same CSV and whose dismissals end there with a documented reason. Two separate scheduled deployables feed that pipeline asynchronously, not on every scan: scan-wcag-poller, woken daily by Cloud Scheduler, checks whether the WCAG standard changed and either auto-refreshes the knowledge base for a minor change or escalates a major one to the same SME queue; pattern-miner, a lightweight Cloud Run Job woken weekly by Cloud Scheduler, calls Gemini Flash over Editor's real dismissal history and, once a consistent pattern is confirmed, grounds Editor's prompt on every future scan." xmlns="http://www.w3.org/2000/svg" font-family="'Public Sans', sans-serif" fill="none" style="max-width:100%;height:auto">
+<svg viewBox="0 0 1260 660" role="img" aria-label="Four deployables. scan-onboarding, the always-on public Cloud Run service, only enqueues a scan onto Cloud Tasks (scan-queue) and returns immediately. scan-worker, a separate service only Cloud Tasks' invoker identity can reach, picks that task up and runs the per-scan pipeline: Orchestrator selects pages, fans out to Analyst's three parallel checks, merges into Editor for independent verification (with one capped retry back to Analyst), then Reporter ranks and drafts, then a route step either auto-exports a CSV of confirmed findings plus an emailed report, or sends low-confidence and critical findings to an SME review queue whose confirmations feed the same CSV and whose dismissals end there with a documented reason. A per-job Firestore lease stops a Cloud Tasks retry from running a second worker on a job the first is still processing. Two further scheduled deployables feed that pipeline asynchronously, not on every scan: scan-wcag-poller, woken daily by Cloud Scheduler, checks whether the WCAG standard changed and either auto-refreshes the knowledge base for a recognized version or escalates an unrecognized one to the same SME queue; pattern-miner, a lightweight Cloud Run Job woken weekly by Cloud Scheduler, calls Gemini Flash over Editor's real dismissal history and, once a consistent pattern is confirmed, grounds Editor's prompt on every future scan." xmlns="http://www.w3.org/2000/svg" font-family="'Public Sans', sans-serif" fill="none" style="max-width:100%;height:auto">
 <defs>
   <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
     <path d="M0,0 L10,5 L0,10 z" fill="currentColor"></path>
@@ -323,7 +323,7 @@ footer { margin-top: 24px; font-size: 12.5px; color: var(--ink-soft); font-famil
 </g>
 </svg>
 </div>
-<figcaption>The three independently deployable pieces and how they connect: the always-on scan pipeline, and the two scheduled loops that keep it grounded without being part of any single scan.</figcaption>
+<figcaption>The four independently deployable pieces and how they connect: the thin public entry point, the queue-fed worker that actually runs the scan pipeline, and the two scheduled loops that keep it grounded without being part of any single scan.</figcaption>
 </figure>
 
 <div class="walkthrough">
@@ -335,15 +335,21 @@ footer { margin-top: 24px; font-size: 12.5px; color: var(--ink-soft); font-famil
   <div class="trigger-row">
     <div class="trigger active">
       <div class="label">Web app: scan a site on demand</div>
-      <div class="desc">A URL submitted through the live front end kicks off a Review Cycle directly.</div>
+      <div class="desc">A URL submitted through the live front end enqueues a scan (Cloud Tasks) and returns immediately -- it does not run the pipeline itself.</div>
       <span class="tag">Live</span>
     </div>
   </div>
 </div>
 
 <div class="zone">
+  <div class="zone-label">Queue</div>
+  <div class="zone-note"><span class="mono">scan-onboarding</span> (the public, always-on service above) only ever enqueues -- it never runs the pipeline in its own request handler. Cloud Tasks (<span class="mono">scan-queue</span>) sits between it and the pipeline, so a burst of submissions queues instead of the public service falling over, and a scan that dies mid-run gets retried without the visitor resubmitting anything. <span class="mono">scan-worker</span>, a separate, not-publicly-reachable Cloud Run service that only Cloud Tasks' dedicated invoker identity can call, is what actually runs the Review Cycle below.</div>
+  <div class="lens-tags"><span class="lens-tag">decoupled execution</span><span class="lens-tag">backpressure via queue, not failure</span></div>
+</div>
+
+<div class="zone">
   <div class="zone-label">Review Cycle</div>
-  <div class="zone-note">Sequential where order matters, parallel where it doesn't, dynamic delegation only at genuine judgment points.</div>
+  <div class="zone-note">Runs inside <span class="mono">scan-worker</span>, one scan per instance at a time. Sequential where order matters, parallel where it doesn't, dynamic delegation only at genuine judgment points.</div>
 
   <div class="pipeline">
 
@@ -464,13 +470,15 @@ footer { margin-top: 24px; font-size: 12.5px; color: var(--ink-soft); font-famil
 <div class="zone">
   <div class="zone-label">Resumability</div>
   <div class="zone-note">Every stage above checkpoints its completion to Firestore as it finishes. A restart, whether a crash or a redeploy, reads the last completed checkpoint and resumes from the next incomplete stage. It never blindly restarts from the top, and never assumes a stage completed just because the job record exists.</div>
-  <div class="lens-tags"><span class="lens-tag">resumability</span><span class="lens-tag">crash-safe by design</span></div>
+  <div class="zone-note">A related, distinct failure mode: Cloud Tasks retries a dispatch that runs past its deadline, and deadline expiry does not mean the first attempt has stopped -- so a slow scan can get a second worker while the first is still running. A per-job Firestore lease (transactional claim, re-entrant for the same owner) is what stops two live workers from double-spending every Gemini call and both emailing the same report.</div>
+  <div class="lens-tags"><span class="lens-tag">resumability</span><span class="lens-tag">crash-safe by design</span><span class="lens-tag">exactly-once execution</span></div>
 </div>
 
 <div class="zone">
   <div class="zone-label">Google Cloud infrastructure</div>
   <div class="infra-grid">
-    <div class="infra-item"><div class="name">Cloud Run</div><div class="role">2 scale-to-zero services (scan-onboarding, scan-wcag-poller) + 1 Job (pattern-miner), least-privilege per service</div></div>
+    <div class="infra-item"><div class="name">Cloud Run</div><div class="role">3 scale-to-zero services (scan-onboarding, scan-worker, scan-wcag-poller) + 1 Job (pattern-miner), least-privilege per service</div></div>
+    <div class="infra-item"><div class="name">Cloud Tasks</div><div class="role">scan-queue: decouples the public service from the pipeline, so a traffic burst queues instead of failing</div></div>
     <div class="infra-item"><div class="name">Google ADK</div><div class="role">LlmAgent + Runner wraps every real-time Gemini call</div></div>
     <div class="infra-item"><div class="name">Vertex AI &middot; Gemini</div><div class="role">Flash-lite for volume, Flash for judgment calls</div></div>
     <div class="infra-item"><div class="name">Firestore</div><div class="role">Job checkpoints, findings, escalations, KB version, learned patterns</div></div>
