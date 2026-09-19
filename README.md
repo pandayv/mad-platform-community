@@ -17,6 +17,8 @@ scanning now runs on a separate queue/worker service rather than
 in-process — so this document describes what's actually deployed today,
 not the original submission.
 
+![MAD Platform homepage: hero scan form, community-edition badge](assets/screenshot-homepage-hero.png)
+
 ---
 
 ## Try it
@@ -86,10 +88,6 @@ while routing the genuinely uncertain ones to a human instead of guessing.
    scan, the report, the report email, and the FAQ alike.
 
 ## What a scan looks like
-
-Paste a URL into the web app:
-
-![MAD Platform homepage: hero scan form, community-edition badge](assets/screenshot-homepage-hero.png)
 
 Watch it work, with live phase labels and a per-page checklist:
 
