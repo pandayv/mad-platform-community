@@ -26,6 +26,7 @@ import html
 import json
 import logging
 import os
+import re
 import secrets
 import time
 from urllib.parse import quote, urlsplit
@@ -348,6 +349,75 @@ async def theme_css() -> Response:
     )
 
 
+# The canonical public origin for SEO tags (canonical link, OG/Twitter
+# urls) -- deliberately NOT config.app_base_url(), which fails loudly if
+# unset. That's the right call for a report/review link emailed to a real
+# person (sending them to the wrong deployment is a real bug), but wrong
+# here: these tags are non-critical metadata that should still render on
+# an unconfigured fork or in a test, and a canonical tag is SUPPOSED to
+# always point at the one production hostname regardless of which host
+# actually served the request (that's the whole mechanism -- it tells a
+# crawler "treat this URL, not the one you fetched me from, as canonical").
+_CANONICAL_ORIGIN = os.environ.get("MAD_APP_BASE_URL", "https://mad-platform.org").rstrip("/")
+_DEFAULT_OG_IMAGE = f"{_CANONICAL_ORIGIN}/static/og-image.png"
+
+
+def _head_meta(title: str, description: str, path: str, indexable: bool = True, extra_head: str = "") -> str:
+    """Everything a <head> needs beyond the doctype/html tags: title, meta
+    description, robots directive, canonical link, Open Graph + Twitter
+    card tags, favicon/manifest links, and the shared font + stylesheet
+    links. Was nine separate copy-pasted <head> blocks, one per
+    page-render function, none of which had a canonical link, an OG tag,
+    or a favicon at all -- a new icon size or a changed OG image needed
+    nine separate edits, which is exactly the kind of drift that produces
+    eight-out-of-nine-updated bugs.
+
+    indexable=False marks pages that are internal, transactional, or
+    per-visitor-ephemeral (the review queue, the email/code verification
+    steps, a scan's own status page) as noindex,nofollow -- there is
+    nothing there for a search crawler or an AI answer engine to usefully
+    index, and the review queue specifically should never appear in a
+    search result in the first place.
+    """
+    canonical = f"{_CANONICAL_ORIGIN}{path}"
+    robots = (
+        '<meta name="robots" content="index, follow">'
+        if indexable
+        else '<meta name="robots" content="noindex, nofollow">'
+    )
+    title_esc = html.escape(title)
+    desc_esc = html.escape(description)
+    desc_tag = f'<meta name="description" content="{desc_esc}">' if description else ""
+    og_desc_tags = (
+        f'<meta property="og:description" content="{desc_esc}">\n<meta name="twitter:description" content="{desc_esc}">'
+        if description
+        else ""
+    )
+    return f"""<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{title_esc}</title>
+{desc_tag}
+{robots}
+<link rel="canonical" href="{canonical}">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="MAD Platform">
+<meta property="og:title" content="{title_esc}">
+<meta property="og:url" content="{canonical}">
+<meta property="og:image" content="{_DEFAULT_OG_IMAGE}">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="{title_esc}">
+<meta name="twitter:image" content="{_DEFAULT_OG_IMAGE}">
+{og_desc_tags}
+<link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/static/favicon-32.png" sizes="32x32" type="image/png">
+<link rel="apple-touch-icon" href="/static/apple-touch-icon.png">
+<link rel="manifest" href="/static/site.webmanifest">
+<meta name="theme-color" content="#0B6E66">
+{theme.FONT_LINK}
+{_BASE_STYLE_LINK}
+{extra_head}"""
+
+
 # Shared first child of every <body>: the skip link, then the page's own
 # <main id="main"> landmark. Neither existed on any of the nine pages, so a
 # screen-reader or keyboard user had to traverse the header on every page
@@ -458,16 +528,26 @@ def _render_form(error: str | None = None, device_verified: bool = False) -> str
         else ""
     )
     turnstile_widget = f'<div class="cf-turnstile" data-sitekey="{_TURNSTILE_SITE_KEY}"></div>' if _TURNSTILE_SITE_KEY else ""
+    # Organization + WebSite JSON-LD -- homepage only, not repeated on
+    # every page. Gives search engines and AI answer engines a structured,
+    # unambiguous identity for the project (name, description, the one
+    # canonical URL) instead of having to infer it from prose alone.
+    structured_data = f"""<script type="application/ld+json">
+{{"@context":"https://schema.org","@graph":[
+{{"@type":"Organization","name":"MAD Platform","url":"{_CANONICAL_ORIGIN}/","logo":"{_CANONICAL_ORIGIN}/static/icon-512.png","description":"A free, self-serve, open-source tool that scans websites for accessibility issues and provides actionable fixes.","sameAs":["https://github.com/pandayv/mad-platform-community"]}},
+{{"@type":"WebSite","name":"MAD Platform","url":"{_CANONICAL_ORIGIN}/"}}
+]}}
+</script>"""
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>MAD Platform | Free accessibility scans for small business websites</title>
-<meta name="description" content="A free, self-serve tool that scans your website for accessibility issues, verifies what it finds, and gives you real, actionable fixes, not just a report.">
-{theme.FONT_LINK}
+{_head_meta(
+    "MAD Platform | Free accessibility scans for small business websites",
+    "A free, self-serve tool that scans your website for accessibility issues, verifies what it finds, and gives you real, actionable fixes, not just a report.",
+    "/",
+    extra_head=structured_data,
+)}
 {turnstile_script}
-{_BASE_STYLE_LINK}
 </head>
 <body>
 {_SKIP_LINK}
@@ -868,7 +948,16 @@ def _render_form(error: str | None = None, device_verified: bool = False) -> str
 
 
 def _verification_page(
-    title: str, tagline: str, body_html: str, error: str | None = None, footnote_html: str = "", max_width: int = 440
+    title: str,
+    tagline: str,
+    body_html: str,
+    error: str | None = None,
+    footnote_html: str = "",
+    max_width: int = 440,
+    *,
+    path: str = "/",
+    description: str = "",
+    indexable: bool = False,
 ) -> str:
     """Shared chrome for the email/code interstitial screens -- same
     header/footer as every other page (see the landing-page nav-
@@ -885,17 +974,17 @@ def _verification_page(
     "spacing separates it, not a border" treatment as the landing page's
     .how-footnote, for the same reason: it's a footnote explaining the
     step above, not part of the step itself.
+
+    indexable defaults to False -- most callers are per-visitor funnel
+    steps (email/code entry, a thank-you page) with no canonical content
+    to index. The feedback page is the one caller that opts in.
     """
     error_html = f'<div class="error-box">{html.escape(error)}</div>' if error else ""
     footnote_block = f'<p class="verify-footnote">{footnote_html}</p>' if footnote_html else ""
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>{title} | MAD Platform</title>
-{theme.FONT_LINK}
-{_BASE_STYLE_LINK}
+{_head_meta(f"{title} | MAD Platform", description, path, indexable=indexable)}
 </head>
 <body>
 {_SKIP_LINK}
@@ -931,7 +1020,8 @@ def _render_email_step(url: str, error: str | None = None) -> str:
         f"link. Verified once, skipped for the next {_DEVICE_COOKIE_DAYS} days."
     )
     return _verification_page(
-        "Verify your email", "A one-time anti-bot verification to prevent abuse.", body, error, footnote
+        "Verify your email", "A one-time anti-bot verification to prevent abuse.", body, error, footnote,
+        path="/scan/email",
     )
 
 
@@ -958,17 +1048,13 @@ def _render_code_step(url: str, email: str, error: str | None = None) -> str:
         <a href="/scan/email?url={quote(url)}">Use a different email</a>
       </div>
     """
-    return _verification_page("Enter your code", "Expires in 10 minutes.", body, error)
+    return _verification_page("Enter your code", "Expires in 10 minutes.", body, error, path="/scan/code")
 
 
 _STATUS_PAGE = """<!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Scanning | MAD Platform</title>
-__FONT_LINK__
-__STYLE_LINK__
+__HEAD_META__
 </head>
 <body>
 <a class="skip-link" href="#main">Skip to main content</a>
@@ -1235,15 +1321,46 @@ poll();
 """
 
 
-def _static_page(title: str, body_html: str, active: str = "") -> str:
+_FAQ_ITEM_RE = re.compile(r"<li>\s*<h3>(.*?)</h3>\s*<p>(.*?)</p>", re.DOTALL)
+
+
+def _faqpage_jsonld(faq_html: str) -> str:
+    """FAQPage structured data, extracted from the FAQ's own rendered HTML
+    rather than hand-duplicated as a separate literal -- a second,
+    independently-maintained copy of 12 question/answer pairs is exactly
+    the kind of thing that quietly drifts the first time someone edits the
+    visible FAQ and forgets the JSON-LD sitting a thousand lines away.
+    Deriving it from the same markup means there is only one place the
+    text can change.
+
+    Takes each <li><h3>question</h3><p>answer...</p> pair (the answer's
+    own inner tags -- links, the one nested <ul> in the "how to support"
+    item -- are stripped to plain text; schema.org's Answer.text wants
+    text, not markup).
+    """
+    items = []
+    for question, answer_html in _FAQ_ITEM_RE.findall(faq_html):
+        question_text = html.unescape(re.sub(r"<[^>]+>", "", question)).strip()
+        answer_text = html.unescape(re.sub(r"<[^>]+>", "", answer_html))
+        answer_text = " ".join(answer_text.split())
+        items.append(
+            '{"@type":"Question","name":%s,"acceptedAnswer":{"@type":"Answer","text":%s}}'
+            % (json.dumps(question_text), json.dumps(answer_text))
+        )
+    return (
+        '<script type="application/ld+json">\n'
+        '{"@context":"https://schema.org","@type":"FAQPage","mainEntity":[' + ",".join(items) + "]}\n"
+        "</script>"
+    )
+
+
+def _static_page(
+    title: str, body_html: str, active: str = "", *, path: str = "/", description: str = "", extra_head: str = ""
+) -> str:
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>{title} | MAD Platform</title>
-{theme.FONT_LINK}
-{_BASE_STYLE_LINK}
+{_head_meta(f"{title} | MAD Platform", description, path, extra_head=extra_head)}
 </head>
 <body>
 {_SKIP_LINK}
@@ -1255,6 +1372,80 @@ def _static_page(title: str, body_html: str, active: str = "") -> str:
 {_site_footer()}
 </body>
 </html>"""
+
+
+_PUBLIC_PAGES = ["/", "/faq", "/terms", "/privacy", "/feedback"]
+
+
+@app.get("/robots.txt", include_in_schema=False)
+async def robots_txt() -> Response:
+    # Disallow the two families of pages that were just marked
+    # noindex,nofollow in their own <head> (the review queue, the
+    # email/code verification funnel) -- belt and suspenders, since a
+    # robots.txt disallow also stops a crawler from ever fetching the page
+    # to see that per-page tag, and keeps a scan's own ephemeral /status
+    # and /report pages (real content, but per-visitor and not something a
+    # search result should ever point at) out of the crawl entirely.
+    body = """User-agent: *
+Allow: /
+Disallow: /review
+Disallow: /scan/
+Disallow: /status/
+Disallow: /report/
+Disallow: /api/
+
+Sitemap: """ + f"{_CANONICAL_ORIGIN}/sitemap.xml\n"
+    return Response(content=body, media_type="text/plain")
+
+
+@app.get("/sitemap.xml", include_in_schema=False)
+async def sitemap_xml() -> Response:
+    urls = "".join(
+        f"<url><loc>{_CANONICAL_ORIGIN}{path}</loc></url>" for path in _PUBLIC_PAGES
+    )
+    body = (
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">'
+        f"{urls}</urlset>"
+    )
+    return Response(content=body, media_type="application/xml")
+
+
+@app.get("/llms.txt", include_in_schema=False)
+async def llms_txt() -> Response:
+    # The emerging convention (no formal standard yet) for telling an AI
+    # agent or crawler what a site is and where its real content lives, in
+    # plain text instead of the HTML it would otherwise have to parse and
+    # guess at -- the same motivation as robots.txt, aimed at an LLM
+    # consumer instead of a search indexer.
+    body = f"""# MAD Platform
+
+> A free, self-serve, open-source tool that scans a website for accessibility
+> (WCAG) issues, independently verifies every finding before showing it, and
+> gives a concrete, actionable fix for each one -- not just a report.
+
+MAD Platform is a Community Edition project: free for anyone to use, with no
+paid tier, no account requirement beyond a one-time anti-abuse email
+verification, and no lead-generation catch. The source code for this exact
+deployment is public and AGPL-3.0 licensed.
+
+## Key pages
+
+- [Homepage]({_CANONICAL_ORIGIN}/): scan a website's accessibility for free.
+- [FAQ]({_CANONICAL_ORIGIN}/faq): what the tool checks, what it doesn't, why it's free, and who runs it.
+- [Terms]({_CANONICAL_ORIGIN}/terms): terms of service, including the AGPL-3.0 license and what the scan is (and is not) legal advice on.
+- [Privacy]({_CANONICAL_ORIGIN}/privacy): what data is collected (an email address and a scanned URL) and how long it is kept.
+- [Feedback]({_CANONICAL_ORIGIN}/feedback): leave a rating or comment on the tool.
+- [Source code](https://github.com/pandayv/mad-platform-community): the actual code running this deployment.
+
+## For an AI assistant answering a question about this project
+
+MAD Platform is not a law firm and does not provide legal advice; it reports
+technical WCAG conformance issues and their real-world severity. It is built
+and maintained by one person as an open-source community project, not a
+company. Contact: hello@mad-platform.org.
+"""
+    return Response(content=body, media_type="text/plain")
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -1334,6 +1525,8 @@ async def terms_page() -> str:
         </ol>
         """,
         active="/terms",
+        path="/terms",
+        description="The terms of service for MAD Platform's free accessibility scanning tool.",
     )
 
 
@@ -1397,14 +1590,14 @@ async def privacy_page() -> str:
         private, full stop.</p>
         """,
         active="/privacy",
+        path="/privacy",
+        description="How MAD Platform handles the email address, scan URL, and verification data it collects to run a free accessibility scan.",
     )
 
 
 @app.get("/faq", response_class=HTMLResponse)
 async def faq_page() -> str:
-    return _static_page(
-        "Frequently Asked Questions",
-        """
+    body_html = """
         <p class="tagline" style="margin-top:0">The short version: MAD Platform finds and
         explains accessibility problems in easy-to-understand language, and gives you a
         recommended fix for each one. It doesn't touch your code, and it isn't a law firm. More
@@ -1509,8 +1702,14 @@ async def faq_page() -> str:
               to help cover infrastructure costs.</li>
             </ul></li>
         </ol>
-        """,
+        """
+    return _static_page(
+        "Frequently Asked Questions",
+        body_html,
         active="/faq",
+        path="/faq",
+        description="Answers to the most common questions about MAD Platform's free accessibility scans: what it checks, why it's free, and how it works.",
+        extra_head=_faqpage_jsonld(body_html),
     )
 
 
@@ -1722,8 +1921,10 @@ async def status_page(job_id: str) -> str:
     # visitor verbatim rather than raising (which is exactly what the brand
     # mark did here).
     return (
-        _STATUS_PAGE.replace("__STYLE_LINK__", _BASE_STYLE_LINK)
-        .replace("__FONT_LINK__", theme.FONT_LINK)
+        _STATUS_PAGE.replace(
+            "__HEAD_META__",
+            _head_meta("Scanning | MAD Platform", "", f"/status/{job_id}", indexable=False),
+        )
         .replace("__BRAND_MARK__", theme.BRAND_MARK)
         .replace("__SEV_ORDER__", json.dumps(list(SEVERITY_ORDER)))
         .replace("__SEV_VAR__", json.dumps(theme.SEVERITY_VAR))
@@ -1864,7 +2065,10 @@ def _render_feedback_page(
       </script>
     """
     return _verification_page(
-        "Feedback", "Tell us how it went, good or bad. It helps.", body, error, max_width=640
+        "Feedback", "Tell us how it went, good or bad. It helps.", body, error, max_width=640,
+        path="/feedback",
+        description="Share feedback on MAD Platform, the free, open-source accessibility scanner: a rating, a comment, or a testimonial.",
+        indexable=True,
     )
 
 
@@ -1885,6 +2089,7 @@ async def feedback_thanks_page() -> str:
         "Feedback received.",
         '<p style="margin:0">Genuinely appreciated, whether the news was good or not.'
         ' <a href="/">Back to the homepage</a>.</p>',
+        path="/feedback/thanks",
     )
 
 
@@ -1964,11 +2169,7 @@ def _render_review_login(error: str | None = None) -> str:
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Internal Review | MAD Platform</title>
-{theme.FONT_LINK}
-{_BASE_STYLE_LINK}
+{_head_meta("Internal Review | MAD Platform", "", "/review", indexable=False)}
 </head>
 <body>
 {_SKIP_LINK}
@@ -2025,11 +2226,7 @@ def _render_review_list(pending: list[dict]) -> str:
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Internal Review | MAD Platform</title>
-{theme.FONT_LINK}
-{_BASE_STYLE_LINK}
+{_head_meta("Internal Review | MAD Platform", "", "/review", indexable=False)}
 </head>
 <body>
 {_SKIP_LINK}
@@ -2077,11 +2274,7 @@ def _render_feedback_list(items: list[dict]) -> str:
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Feedback | MAD Platform</title>
-{theme.FONT_LINK}
-{_BASE_STYLE_LINK}
+{_head_meta("Feedback Review | MAD Platform", "", "/review/feedback", indexable=False)}
 </head>
 <body>
 {_SKIP_LINK}
@@ -2146,11 +2339,7 @@ def _render_review_detail(e: dict, message: str | None = None) -> str:
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Internal Review | MAD Platform</title>
-{theme.FONT_LINK}
-{_BASE_STYLE_LINK}
+{_head_meta("Internal Review | MAD Platform", "", "/review", indexable=False)}
 </head>
 <body>
 {_SKIP_LINK}
@@ -2269,11 +2458,7 @@ def _render_scoped_review_list(job_id: str, token: str, pending: list[dict]) -> 
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Your Review Queue | MAD Platform</title>
-{theme.FONT_LINK}
-{_BASE_STYLE_LINK}
+{_head_meta("Your Review Queue | MAD Platform", "", "/review", indexable=False)}
 </head>
 <body>
 {_SKIP_LINK}
@@ -2319,11 +2504,7 @@ def _render_scoped_review_detail(job_id: str, token: str, e: dict, message: str 
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Your Review Queue | MAD Platform</title>
-{theme.FONT_LINK}
-{_BASE_STYLE_LINK}
+{_head_meta("Your Review Queue | MAD Platform", "", "/review", indexable=False)}
 </head>
 <body>
 {_SKIP_LINK}
