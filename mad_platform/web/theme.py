@@ -404,6 +404,11 @@ h2 { font-family: "Newsreader", Georgia, serif; font-weight: 600; font-size: 21p
   transition: border-color 0.15s ease, box-shadow 0.15s ease;
 }
 .scan-bar:focus-within { border-color: var(--brand); box-shadow: 0 0 0 3px var(--brand-tint), var(--shadow); }
+/* Groups the logo and the URL input as one flex item so they wrap as a
+   pair, not separately -- without this, wrapping .scan-bar's children
+   individually put the logo alone on its own row above the input on
+   narrow screens. */
+.scan-bar-field { display: flex; align-items: center; gap: 4px; flex: 1; min-width: 0; }
 .scan-bar .brand-mark { width: 18px; height: 18px; }
 .scan-bar input {
   flex: 1; min-width: 0; border: none; background: none; outline: none;
@@ -480,7 +485,11 @@ h2 { font-family: "Newsreader", Georgia, serif; font-weight: 600; font-size: 21p
 }
 @media (max-width: 480px) {
   .scan-bar { flex-wrap: wrap; border-radius: 22px; padding: 14px 16px; }
-  .scan-bar input { flex-basis: 100%; padding: 2px 0 10px; }
+  /* flex-basis: 100% on the field GROUP (logo+input together), not on the
+     input alone -- that's what keeps the logo and the URL text on the same
+     row when they wrap, with the button dropping to its own row below. */
+  .scan-bar-field { flex-basis: 100%; }
+  .scan-bar input { padding: 2px 0 10px; }
   /* No align-self override needed any more -- .scan-bar .scan-submit sets
      center for every width now, instead of this rule undoing a leak from
      the base rule for phones only. */
@@ -491,11 +500,14 @@ h2 { font-family: "Newsreader", Georgia, serif; font-weight: 600; font-size: 21p
    page itself, just surfaced earlier -- at the actual point someone
    decides to click Scan, not several sections below it, so the email
    step (first-time visitors only) never lands as a surprise. */
-.scan-hint { display: flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--muted); margin: 10px 0 0; }
+/* Sits above the pill, not below -- the margin is on the bottom (a small
+   gap before the pill) rather than the top, since the hero-tagline's own
+   margin-bottom already supplies the gap above this. */
+.scan-hint { display: flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--muted); margin: 0 0 10px; }
 .scan-hint svg { width: 14px; height: 14px; color: var(--ok); flex-shrink: 0; }
 /* The lightbulb (a heads-up, first-time visitors only) deliberately isn't
    --ok green -- that color already means "verified/succeeded" for the
-   returning-visitor checkmark right above it in this same slot, and this
+   returning-visitor checkmark that occupies this same slot, and this
    message is neither: it's a plain notice, not a success state. --brand
    keeps it visually related (still an icon+text hint) without borrowing
    a color that means something more specific elsewhere on the page. */
