@@ -831,7 +831,7 @@ h2 { font-family: "Newsreader", Georgia, serif; font-weight: 600; font-size: 21p
 }
 .trust-section-label:first-child { margin-top: 0; }
 
-label.f-label { display: block; font-size: 11.5px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); font-weight: 700; margin-bottom: 6px; }
+label.f-label, legend.f-label { display: block; font-size: 11.5px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); font-weight: 700; margin-bottom: 6px; padding: 0; border: 0; }
 /* input[type=password] only. The selector used to lead with
    input[type=url], which matched nothing: the URL field is deliberately
    type="text" (see app._safe_url_or_error -- native type="url" validation
