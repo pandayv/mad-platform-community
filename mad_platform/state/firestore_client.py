@@ -109,7 +109,11 @@ _LIMIT_DEFAULTS = {
     # angles rather than duplicating one limit.
     "MAD_MAX_SCANS_PER_EMAIL_PER_DAY": 10,
     "MAD_MAX_SCANS_PER_IP_PER_DAY": 15,
-    "MAD_MAX_SCANS_PER_MONTH": 500,  # a scan-count proxy for the $ budget, see DECISIONS_LOG.md
+    # A scan-count proxy for the $ budget, see DECISIONS_LOG.md -- raised
+    # from 500 for the public launch under real cost data uncertainty
+    # (BigQuery billing export was only just linked); revisit once actual
+    # per-scan cost is known from real usage.
+    "MAD_MAX_SCANS_PER_MONTH": 1000,
     "MAD_MAX_FEEDBACK_PER_IP_PER_DAY": 10,
     # Verification-code guesses one address may submit in a day, across
     # every email it tries. MAX_CODE_ATTEMPTS below bounds guesses per

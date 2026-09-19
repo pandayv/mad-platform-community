@@ -334,10 +334,16 @@ h2 { font-family: "Newsreader", Georgia, serif; font-weight: 600; font-size: 21p
 .site-footer-inner {
   max-width: var(--content-max); margin: 0 auto; padding: 28px 24px 40px;
   display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap;
-  font-size: 12.5px; color: var(--muted);
+  /* --ink-soft, not --muted -- a scan flagged this footer at 4.94:1
+     against its real background, which does clear the 4.5:1 minimum
+     (verified: computed live in two browser engines, and by the exact
+     WCAG relative-luminance formula), but close enough to the line that
+     a small color shift in a future palette tweak could tip it under.
+     --ink-soft holds a comfortable 8:1+ margin instead of a ~10% one. */
+  font-size: 12.5px; color: var(--ink-soft);
 }
 .site-footer nav { display: flex; gap: 18px; flex-wrap: wrap; }
-.site-footer a { color: var(--muted); text-decoration: none; }
+.site-footer a { color: var(--ink-soft); text-decoration: none; }
 .site-footer a:hover { color: var(--brand-dark); }
 .site-footer a.support-link { display: inline-flex; align-items: center; gap: 5px; }
 .site-footer a.support-link svg { width: 13px; height: 13px; flex-shrink: 0; }

@@ -1713,7 +1713,7 @@ async def terms_page() -> str:
     return _static_page(
         "Terms of Service",
         """
-        <div class="trust-section-label">Read these three first</div>
+        <h2 class="trust-section-label">Read these three first</h2>
         <ol class="trust-list">
           <li><h3>This is not legal advice, and it never will be</h3>
             <p>MAD Platform is an automated scanning tool. It looks for patterns that commonly
@@ -1744,7 +1744,7 @@ async def terms_page() -> str:
             alone, and you won't hold the operator responsible for that decision.</p></li>
         </ol>
 
-        <div class="trust-section-label">The rest, for completeness</div>
+        <h2 class="trust-section-label">The rest, for completeness</h2>
         <ol class="trust-list" style="counter-reset: trust-item 3">
           <li><h3>No contract, no obligation</h3>
             <p>Nothing here creates a binding agreement between you and the operator, and using
@@ -1858,7 +1858,7 @@ async def faq_page() -> str:
         recommended fix for each one. It doesn't touch your code, and it isn't a law firm. More
         details below.</p>
 
-        <div class="trust-section-label">What this is</div>
+        <h2 class="trust-section-label">What this is</h2>
         <ol class="trust-list">
           <li><h3>What does this tool actually do?</h3>
             <p>It scans the pages on your site that carry the most real risk, checks them with
@@ -1885,7 +1885,7 @@ async def faq_page() -> str:
             selling your contact info to an accessibility consultant after you scan.</p></li>
         </ol>
 
-        <div class="trust-section-label">Why this exists</div>
+        <h2 class="trust-section-label">Why this exists</h2>
         <ol class="trust-list" style="counter-reset: trust-item 3">
           <li><h3>Why does this exist?</h3>
             <p>To make the internet a little more usable for everyone. This free tool exists so a
@@ -1907,7 +1907,7 @@ async def faq_page() -> str:
             Squarespace, or something custom.</p></li>
         </ol>
 
-        <div class="trust-section-label">Trust &amp; privacy</div>
+        <h2 class="trust-section-label">Trust &amp; privacy</h2>
         <ol class="trust-list" style="counter-reset: trust-item 6">
           <li><h3>Can I really trust an automated tool with something this important?</h3>
             <p>Yes. Here's why: every finding goes through an independent verification step
@@ -1932,7 +1932,7 @@ async def faq_page() -> str:
             walk into that conversation already prepared, not starting from zero.</p></li>
         </ol>
 
-        <div class="trust-section-label">About the project</div>
+        <h2 class="trust-section-label">About the project</h2>
         <ol class="trust-list" style="counter-reset: trust-item 9">
           <li><h3>Who's actually behind this?</h3>
             <p>An independent, open-source project, not a company; built and maintained in the

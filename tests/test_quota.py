@@ -161,4 +161,4 @@ def test_limits_are_read_at_call_time_not_frozen_at_import(monkeypatch):
     monkeypatch.setenv("MAD_MAX_SCANS_PER_MONTH", "7")
     assert fs.max_scans_per_month() == 7
     monkeypatch.delenv("MAD_MAX_SCANS_PER_MONTH")
-    assert fs.max_scans_per_month() == 500
+    assert fs.max_scans_per_month() == 1000
