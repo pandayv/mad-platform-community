@@ -23,15 +23,12 @@ from pydantic import BaseModel
 
 from mad_platform import config
 from mad_platform.agents.orchestrator import run_one_time_scan
+from mad_platform.logging_setup import configure_logging
 from mad_platform.state import firestore_client as fs
 from mad_platform.tools.issue_sink import CsvIssueSink
 
-_handler = logging.StreamHandler()
-_handler.setFormatter(logging.Formatter("%(levelname)s:%(name)s:%(message)s"))
-_mad_logger = logging.getLogger("mad_platform")
-_mad_logger.setLevel(logging.INFO)
-_mad_logger.addHandler(_handler)
-_mad_logger.propagate = False
+# See mad_platform/logging_setup.py for why this is not basicConfig().
+configure_logging()
 
 logger = logging.getLogger("mad_platform.worker")
 

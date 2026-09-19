@@ -29,6 +29,20 @@ data -- not as a bounds check at each of the six subscript sites, which is
 how this class of bug grows back in a new place. Every caller of
 `generate_structured` that returns index-bearing items runs its result
 through `validate_indexed` before anything downstream touches it.
+
+**On (3): a log line was the first fix, and it was not enough.** The
+finding still vanished; only its disappearance became visible, in a Cloud
+Run WARNING nobody reads on a free tool. A rule-check hit is an objective
+markup fact -- an `<img>` either carries an `alt` attribute or it does
+not -- so an unanswered one is not "nothing was found there", which is
+what the report then told the user. `unanswered_indices` below exists so
+the caller can route each one to a deliberate default disposition instead,
+which is what both callers now do: Editor confirms it below
+`action_agent.LOW_CONFIDENCE_THRESHOLD` and Reporter ranks it the same
+way, so it lands in the owner's review queue through the gate that
+already exists. That matches this codebase's own stated principle -- "a
+missed real violation is the actual risk" (editor's prompt) -- rather than
+trading a false negative for a quiet one.
 """
 
 from __future__ import annotations
@@ -91,8 +105,24 @@ def validate_indexed(items: list[T], source_len: int, *, label: str) -> list[T]:
     if len(valid) != source_len:
         logger.warning(
             "%s: model returned %d usable item(s) for %d input item(s) -- %d input item(s) "
-            "went unanswered and will not appear downstream",
+            "went unanswered; the caller is responsible for giving each one a default "
+            "disposition rather than dropping it (see unanswered_indices)",
             label, len(valid), source_len, max(0, source_len - len(valid)),
         )
 
     return valid
+
+
+def unanswered_indices(valid: list[T], source_len: int) -> list[int]:
+    """Which positions of the source list the model said nothing usable
+    about -- the complement of the indices in `valid`.
+
+    Separate from `validate_indexed` rather than returned alongside it
+    because the right default disposition is genuinely the caller's call
+    (Editor and Reporter build different objects), while *noticing* the gap
+    must not be. Callers pass the already-validated list, so an item that
+    was dropped for being out of range or duplicated counts as unanswered
+    here too, which is correct: the source item still has no answer.
+    """
+    answered = {item.finding_index for item in valid}
+    return [index for index in range(source_len) if index not in answered]

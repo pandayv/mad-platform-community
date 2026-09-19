@@ -36,7 +36,7 @@ from mad_platform.tools import notify
 from mad_platform.tools.adk_client import generate_structured
 from mad_platform.tools.gemini_client import FLASH
 from mad_platform.tools.rag import embed_and_store_corpus
-from mad_platform.tools.wcag_version import fetch_current_wcag_version
+from mad_platform.tools.wcag_version import read_wcag_versions
 
 
 class _VersionChangeClassification(BaseModel):
@@ -70,15 +70,43 @@ async def run_wcag_freshness_check(simulate_current_version: str | None = None) 
     """The scheduled freshness-check tick.
 
     simulate_current_version overrides the real W3C fetch (see
-    check_wcag_version.py --simulate), letting either branch of the
+    check_wcag_version.py --force-version), letting either branch of the
     decision be exercised on demand rather than waiting for a real WCAG
-    version change, which is rare.
+    version change, which is rare. It is an override, not a dry run: past
+    the comparison below, everything that follows is the real refresh
+    against the real database. The CLI flag is named and gated
+    accordingly.
     """
     stored = fs.get_kb_version()
     stored_version = stored.get("version") if stored else None
 
-    current_version = simulate_current_version or fetch_current_wcag_version()
+    if simulate_current_version:
+        current_version, unrecognized = simulate_current_version, ()
+    else:
+        reading = read_wcag_versions()
+        current_version, unrecognized = reading.current, reading.unrecognized
     fs.touch_kb_check(current_version)
+
+    if unrecognized:
+        # A version W3C's overview page references that this project has
+        # not recorded as a Recommendation -- in practice, WCAG 3 draft
+        # material. It deliberately does NOT become current_version: taking
+        # the highest link on the page is what would re-embed, write a
+        # draft's number as the stored knowledge-base version, and make the
+        # real transition a no-op when it eventually lands (see
+        # tools/wcag_version.py). A person is told instead, which is the
+        # same human step this module's docstring already says a genuine
+        # conformance-model shift needs anyway.
+        notify.alert(
+            "A WCAG version this system does not recognize appeared on W3C's overview page",
+            [
+                f"Unrecognized: {', '.join(unrecognized)}",
+                f"Still treating {current_version} as current, and not refreshing on the strength of a draft.",
+                "If one of these has actually been published as a Recommendation, add it to "
+                "wcag_version.KNOWN_RECOMMENDATIONS -- and read this module's docstring first, "
+                "because a conformance-model shift also needs data/wcag_corpus.py rewritten by hand.",
+            ],
+        )
 
     if stored_version == current_version:
         return {"action": "no_change", "version": current_version}

@@ -13,6 +13,14 @@ from __future__ import annotations
 import asyncio
 
 from mad_platform.agents.pattern_miner import mine_patterns
+from mad_platform.logging_setup import configure_logging
+
+# This entry point had no logging bootstrap at all while the three web
+# services each carried their own copy of one -- so the miner's
+# logger.info and notify output in a Cloud Run Job depended on whatever
+# the default root logger happened to do. That omission is what made the
+# duplication worth removing rather than just tidying.
+configure_logging()
 
 
 async def main() -> None:

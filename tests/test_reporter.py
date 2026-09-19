@@ -128,35 +128,92 @@ def _confirmed(n: int) -> dict[str, list[VerifiedFinding]]:
     }
 
 
-async def test_rank_and_recommend_drops_out_of_range_index(monkeypatch):
+def _unranked(ranked):
+    """The placeholders -- B5's default disposition for a confirmed finding
+    the ranking pass said nothing usable about.
+    """
+    return [r for r in ranked if "did not return a recommendation" in r.suggested_fix]
+
+
+async def test_an_out_of_range_index_does_not_take_the_finding_with_it(monkeypatch):
     """Used to raise IndexError, fail the whole scan, and show the user
-    "Scan failed: list index out of range".
+    "Scan failed: list index out of range". Then it was dropped instead --
+    which stopped the crash but silently removed a CONFIRMED finding from
+    the report, the CSV and the score (B5). Now the bad recommendation is
+    still discarded, and the finding it failed to address is kept.
     """
     async def fake_generate(*_args, **_kwargs):
         return _FakeResponse([_recommendation(0), _recommendation(99)])
 
     monkeypatch.setattr(reporter, "generate_structured", fake_generate)
     ranked = await reporter.rank_and_recommend(_confirmed(2))
-    assert len(ranked) == 1
-    assert ranked[0].wcag_criterion == "1.1.0"
+    assert len(ranked) == 2
+    assert {r.wcag_criterion for r in ranked} == {"1.1.0", "1.1.1"}
+    assert [r.wcag_criterion for r in _unranked(ranked)] == ["1.1.1"]
 
 
-async def test_rank_and_recommend_drops_negative_index(monkeypatch):
+async def test_a_negative_index_does_not_take_the_finding_with_it(monkeypatch):
     """Used to silently attach this recommendation to the LAST finding."""
     async def fake_generate(*_args, **_kwargs):
         return _FakeResponse([_recommendation(-1)])
 
     monkeypatch.setattr(reporter, "generate_structured", fake_generate)
-    assert await reporter.rank_and_recommend(_confirmed(3)) == []
+    ranked = await reporter.rank_and_recommend(_confirmed(3))
+    assert len(ranked) == 3
+    assert len(_unranked(ranked)) == 3, "nothing was validly ranked, so all three are placeholders"
 
 
 async def test_rank_and_recommend_dedupes_repeated_index(monkeypatch):
+    """The duplicate is still discarded -- two recommendations must never
+    fight over one finding -- but the finding the model skipped in order to
+    repeat itself is kept.
+    """
     async def fake_generate(*_args, **_kwargs):
         return _FakeResponse([_recommendation(0), _recommendation(0, severity="low")])
 
     monkeypatch.setattr(reporter, "generate_structured", fake_generate)
     ranked = await reporter.rank_and_recommend(_confirmed(2))
-    assert [r.severity for r in ranked] == ["high"]
+    assert sorted(r.severity for r in ranked) == ["high", "medium"]
+    assert [r.wcag_criterion for r in _unranked(ranked)] == ["1.1.1"]
+
+
+async def test_an_unranked_finding_is_routed_to_human_review(monkeypatch):
+    """The whole point of keeping it: a confirmed finding with no risk
+    assessment must not be auto-filed as though one had been made. Its
+    confidence is forced under the escalation gate instead.
+    """
+    from mad_platform.agents.action_agent import needs_escalation
+
+    async def fake_generate(*_args, **_kwargs):
+        return _FakeResponse([])
+
+    monkeypatch.setattr(reporter, "generate_structured", fake_generate)
+    ranked = await reporter.rank_and_recommend(_confirmed(1))
+    assert len(ranked) == 1
+    assert needs_escalation(ranked[0])
+    assert ranked[0].severity in ("medium",), "a placeholder must not inflate the score"
+
+
+async def test_an_unranked_finding_keeps_editors_real_rationale(monkeypatch):
+    """The judgment that WAS made has to survive; only the missing half is
+    described as missing.
+    """
+    async def fake_generate(*_args, **_kwargs):
+        return _FakeResponse([])
+
+    monkeypatch.setattr(reporter, "generate_structured", fake_generate)
+    ranked = await reporter.rank_and_recommend(_confirmed(1))
+    assert ranked[0].editor_rationale == "r0"
+
+
+async def test_a_fully_answered_response_produces_no_placeholders(monkeypatch):
+    """The normal path must be untouched."""
+    async def fake_generate(*_args, **_kwargs):
+        return _FakeResponse([_recommendation(0), _recommendation(1)])
+
+    monkeypatch.setattr(reporter, "generate_structured", fake_generate)
+    ranked = await reporter.rank_and_recommend(_confirmed(2))
+    assert _unranked(ranked) == []
 
 
 async def test_rank_and_recommend_sorts_by_risk_score_descending(monkeypatch):

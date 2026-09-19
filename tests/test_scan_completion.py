@@ -289,3 +289,69 @@ def test_the_lease_claim_is_a_real_firestore_transaction():
     assert isinstance(fs._claim_lease, firestore_transaction._Transactional)
     assert isinstance(fs._clear_lease, firestore_transaction._Transactional)
     assert isinstance(fs._merge_page_field, firestore_transaction._Transactional)
+
+
+# --- B4: a failure after complete_job() must not cost the report email ----
+
+
+def _run_scan_source() -> str:
+    import inspect as _inspect
+
+    from mad_platform.agents import orchestrator
+
+    return _inspect.getsource(orchestrator.run_one_time_scan)
+
+
+def test_the_post_completion_block_swallows_its_own_failures():
+    """Everything after complete_job() is notification: Slack, the Gemini
+    email draft, the attachment build, the Resend upload. It used to be
+    bare, so a transient failure there propagated -- the handler correctly
+    refused to downgrade the job and then re-raised anyway, which
+    worker_app turns into a 500 and Cloud Tasks into a retry that hits the
+    `already_completed` short-circuit and never tries the email again. The
+    promise on the queued status page ("we'll email your full report as
+    soon as it's ready") went silently unkept for exactly the class of
+    failure the retry machinery exists to absorb.
+    """
+    source = _run_scan_source()
+    tail = source.split("fs.complete_job(", 1)[1]
+    inner = tail.split("notify.summary(", 1)[0]
+    assert "try:" in inner, "the notification tail is no longer guarded"
+
+    # And the guard must not re-raise.
+    guarded = tail.split("except Exception", 1)[1].split("except Exception", 1)[0]
+    assert "raise" not in guarded, "the post-completion handler re-raises again"
+    assert "logger.exception" in guarded, "a swallowed failure must still be visible"
+
+
+def test_the_notification_tail_runs_after_the_job_is_marked_complete():
+    """The ordering B4's original fix established, which the new try block
+    must not have disturbed: status and summary are written first, so the
+    status page renders whatever happens below.
+    """
+    source = _run_scan_source()
+    assert source.index("fs.complete_job(") < source.index("notify.summary(")
+    assert source.index("fs.complete_job(") < source.index("send_report_email(")
+
+
+# --- F6: the visitor never sees raw internal exception text ---------------
+
+
+def test_a_failed_scan_records_an_operator_written_message_not_the_exception():
+    """The `error` field is returned verbatim by GET /api/status/{job_id}
+    and rendered on the public status page. It is escaped there, so this is
+    information disclosure rather than XSS -- a MissingConfigError naming
+    an env var, a google.api_core error naming the GCP project and a
+    resource path, or a FetchError carrying the internal Playwright
+    message.
+    """
+    source = _run_scan_source()
+    # Comments stripped: the one above the fix names `str(exc)` precisely
+    # because that was the bug.
+    code = "\n".join(
+        line for line in source.splitlines() if not line.lstrip().startswith("#")
+    )
+    assert "str(exc)" not in code, "no exception text may reach the job record"
+    # The real text still has to go somewhere.
+    handler = code.split("except Exception", 1)[1]
+    assert "logger.exception" in handler

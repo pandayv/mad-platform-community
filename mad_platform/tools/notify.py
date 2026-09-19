@@ -29,13 +29,17 @@ import os
 
 import requests
 
+from mad_platform import config
+
 logger = logging.getLogger("mad_platform.notify")
 
 _TIMEOUT_S = 10
 _ALERT_COLOR = "#B91C1C"
 _SUMMARY_COLOR = "#2563EB"
 _RESEND_API_URL = "https://api.resend.com/emails"
-_FROM_ADDRESS = os.environ.get("MAD_EMAIL_FROM", "MAD Platform <scans@mad-platform.org>")
+# Behind config.email_from_address(), not a module constant: see
+# mad_platform/config.py's rule 2. The value is read at send time now, so a
+# revision that sets MAD_EMAIL_FROM no longer depends on import order.
 
 
 def _post(payload: dict) -> None:
@@ -100,7 +104,7 @@ def send_verification_code_email(to_email: str, code: str) -> bool:
             _RESEND_API_URL,
             headers={"Authorization": f"Bearer {api_key}"},
             json={
-                "from": _FROM_ADDRESS,
+                "from": config.email_from_address(),
                 "to": [to_email],
                 "subject": f"Your verification code: {code}",
                 "html": body_html,
@@ -180,7 +184,7 @@ def send_report_email(
     body_html = f"<div style='padding:24px 16px'>{email_summary_html}{review_block}</div>"
 
     payload = {
-        "from": _FROM_ADDRESS,
+        "from": config.email_from_address(),
         "to": [to_email],
         "subject": f"Your accessibility scan is ready: {url}",
         "html": body_html,

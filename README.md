@@ -1,9 +1,9 @@
 # MAD Platform — Community Edition
 
-**Multi-Agent Defense Platform, for accessibility compliance.** An
-autonomous agent that scans a website for accessibility problems,
-verifies its own findings, and takes real action on what's confirmed, not
-just a report. Free, no account needed.
+**Multi-Agent Defense Platform, for accessibility compliance.** A free tool
+that scans a website for accessibility problems, checks its own findings
+before showing them to you, and gives you a concrete fix for each one, not
+just a report. No account needed.
 
 Originally built for the [All Things Agentic Hackathon](https://allthingsagentichackathon.devpost.com/)
 on Gemini, Google's Agent Development Kit (ADK), and Google Cloud; this is
@@ -15,22 +15,20 @@ not the original submission.
 
 ---
 
-## Try it live
+## Try it
 
-**[Live scanner](https://mad-platform.org):**
-paste in a URL, give an email address to receive the report, and watch it
-scan. No account, no access code, free.
+**[mad-platform.org](https://mad-platform.org)** is the public-facing
+website and our main product: paste in a URL, give an email address to
+receive the report, and watch it scan. No account, no access code, free.
 
 **[Architecture diagram](https://pandayv.github.io/mad-platform-community/):**
-the full pipeline, the WCAG auto-heal loop, and the Google Cloud
-infrastructure behind it.
+the full pipeline and the Google Cloud infrastructure behind it.
 
-### Testing it yourself
+### What to expect
 
-1. Open the live scanner above and submit any real URL.
+1. Submit any real URL on the website above.
 2. Watch the status page track live progress. A multi-page scan usually
-   takes one to three minutes, depending on how many pages get selected
-   and real-time model latency. If there's a burst of traffic ahead of
+   takes one to three minutes. If there's a burst of traffic ahead of
    you, you'll see a queued state first — scans process one at a time per
    worker instance, and the page tells you it's safe to close the tab.
 3. On the completed report, every confirmed finding is listed with a
@@ -55,71 +53,17 @@ issues, checks its own work before trusting it, explains what matters most
 in plain language, and hands you the confirmed ones ready to act on,
 while routing the genuinely uncertain ones to a human instead of guessing.
 
-## Guiding principles
-
-Four principles shaped every design choice in this build, each backed by
-what's actually running, not just stated intent.
-
-### Trust, but verify
-- Editor independently re-checks every Analyst finding against actual
-  evidence before it's trusted, not just re-summarized.
-- WCAG citations are grounded in retrieved standard text (RAG), not a
-  model's unverified recollection.
-- Every page gets three parallel checks: rule-based, semantic, and
-  multimodal visual check, reasoning over the actual rendered screenshot.
-- Every LLM-returned reference into another list (which finding a
-  verification or fix applies to) is validated against the list it's
-  supposed to index before anything downstream trusts it — an
-  out-of-range or duplicate reference is dropped and logged, never
-  silently misapplied.
-
-### Fit for purpose
-- Two-tier model selection: `flash-lite` for high-volume calls, `flash`
-  for judgment calls worth the cost, including the low-volume weekly
-  batch job mining dismissal patterns.
-- Orchestration pattern chosen per step: sequential where order matters,
-  parallel where it doesn't, dynamic delegation reserved for genuine
-  judgment calls.
-- Deterministic checks stay plain code, not LLM calls, because they don't
-  need judgment; every real-time model call runs through Google ADK's
-  `LlmAgent` and `Runner`, not a raw SDK call; every prompt is bounded to
-  what that call actually needs, not the full page dumped in.
-
-### Autonomy with accountability
-- Every irreversible action is idempotent, human-gated, or both; if a
-  scan is resumed after interruption, it resumes past what is already
-  completed.
-- A scan is marked complete only once its results actually exist and are
-  readable — status and summary are written together, atomically, so
-  there's no window where the two disagree.
-- Least privilege applies at every layer: every part of the system can
-  only touch what its job requires, and the customer-facing tool and the
-  internal review tool don't share access at all. The review queue itself
-  fails *closed*: if its access code isn't configured, nobody gets in,
-  not everybody.
-- The crawler refuses to fetch private, internal, or cloud-metadata
-  addresses to protect from threats.
-- Two layers of audit trail: Google Cloud's own Audit Logs for
-  infrastructure action, and the pipeline's own record.
-
-### Self-improving
-- A weekly batch job mines Editor's real dismissal history for
-  recurring, consistent patterns; confirmed ones become permanent
-  grounding for every scan that follows, not a one-time fix.
-- The WCAG knowledge base heals itself the same way: a scheduled check
-  keeps it current, refreshing automatically for minor changes and
-  asking a person first for anything structural.
-
 ## What it does
 
-1. **Scans a site autonomously.** Decides which pages matter most on its
-   own (home, contact, forms), then checks them with both deterministic
-   rule checks (contrast, missing alt text, heading structure, form
-   labels, ARIA misuse, tab order) and AI-assisted review for what rules
-   can't judge, like whether alt text is actually descriptive.
+1. **Scans a site.** Decides which pages matter most on its own (home,
+   contact, forms), then checks them with both deterministic rule checks
+   (contrast, missing alt text, heading structure, form labels, ARIA
+   misuse, tab order) and AI-assisted review for what rules can't judge,
+   like whether alt text is actually descriptive.
 2. **Verifies its own findings.** Every flag is independently
    double-checked before it's trusted; false positives get dismissed with
-   a documented reason, real findings get a confidence score.
+   a documented reason, real findings get a confidence score. Anything
+   still uncertain goes to a human reviewer instead of guessing.
 3. **Ranks by real-world risk**, not raw technical severity: WCAG
    conformance level, how often that violation type shows up in real
    accessibility litigation, and estimated user impact.
@@ -127,21 +71,15 @@ what's actually running, not just stated intent.
    report with an overall score, severity breakdown, plain-English
    executive summary, and a concrete suggested fix per finding.
 5. **Takes real action.** Exports every confirmed finding as a CSV in
-   Jira's importer column format and emails the full report; routes the
-   low-confidence or critical minority to a human reviewer instead, who
-   can confirm or dismiss.
+   Jira's importer column format and emails the full report.
 6. **Recovers from failure.** A scan interrupted mid-way (crash, redeploy,
    a queue retry) resumes from its last completed checkpoint rather than
    starting over or silently duplicating work.
-7. **Keeps its own reference material current.** A separate scheduled
-   service checks whether the WCAG standard itself has changed,
-   auto-refreshing for minor additive updates and routing structural
-   changes to human review before acting on them.
+7. **Keeps its WCAG reference current.** Checks whether the accessibility
+   standard itself has changed, on a schedule.
 8. **Asks how it did.** A short, open feedback form (star rating,
    comment, optional testimonial opt-in) reachable from the completed
-   scan, the report, the report email, and the FAQ alike — not gated
-   behind proof you scanned anything, just rate-limited like every other
-   public form here.
+   scan, the report, the report email, and the FAQ alike.
 
 ## What a scan looks like
 
@@ -159,7 +97,7 @@ of findings with suggested fixes:
 ![Completed scan result: site score, severity breakdown, executive summary](assets/screenshot-completed.png)
 
 The homepage also lays out how the free tool stacks up against other
-scanners, backed by things actually checked, not marketing copy:
+scanners, backed by what's actually checked:
 
 ![How we compare: MAD Platform vs. free scanners vs. paid audit tools](assets/screenshot-how-we-compare.png)
 
@@ -167,7 +105,7 @@ scanners, backed by things actually checked, not marketing copy:
 
 - **AI:** Gemini via Vertex AI for every call, real-time or batch
   (`gemini-3.5-flash-lite` for high-volume calls, `gemini-3.7-flash` for
-  judgment calls, `gemini-embedding-001` for RAG retrieval)
+  judgment calls, `gemini-embedding-001` for retrieval)
 - **Agent framework:** Google Agent Development Kit (ADK)
 - **Compute:** Cloud Run, three scale-to-zero services split by trigger
   type and resource profile —
@@ -179,10 +117,10 @@ scanners, backed by things actually checked, not marketing copy:
     Gemini, one scan at a time per instance — 2Gi memory,
     `containerConcurrency=1`).
   - `scan-wcag-poller`: not publicly reachable either, ticked daily by
-    Cloud Scheduler to run the WCAG freshness check.
+    Cloud Scheduler to check for WCAG standard updates.
 
-  plus one lightweight Cloud Run Job (`pattern-miner`) for the weekly
-  dismissal-pattern miner.
+  plus one lightweight Cloud Run Job (`pattern-miner`) for a weekly
+  pattern-mining task.
 - **Queueing:** Cloud Tasks (`scan-queue`) sits between `scan-onboarding`
   and `scan-worker` — submitting a scan enqueues a task rather than
   running the pipeline in the request handler, so a burst of traffic
@@ -193,29 +131,28 @@ scanners, backed by things actually checked, not marketing copy:
   anti-abuse quota counters (with a TTL policy on the short-lived ones)
 - **Storage:** Cloud Storage, for generated reports
 - **Scheduling:** Cloud Scheduler, driving the WCAG freshness check
-  (daily) and the dismissal-pattern miner (weekly)
+  (daily) and the pattern miner (weekly)
 - **Browser automation:** Playwright, for headless rendering, screenshots,
   and computed-style extraction for real contrast-ratio checking — this
   is the one dependency that lives only in `scan-worker`'s image
 - **Web:** FastAPI, powering the scan-submission UI, status API, and
-  marketing/FAQ/legal pages
+  website's FAQ/legal pages
 - **Anti-abuse:** Cloudflare Turnstile (opt-in, off unless a site key is
   configured) plus disposable-email filtering and per-email/per-IP/global
-  monthly quota, checked and reserved inside a single Firestore
-  transaction so concurrent submissions can't all slip through at once
+  monthly quota
 - **Ticketing:** CSV export by default, in Jira's importer column format,
   so confirmed findings drop straight into a real tracker with no account
-  needed; a real `JiraIssueSink` also exists in code as an opt-in for
+  needed; a real Jira integration also exists in code as an opt-in for
   anyone self-hosting this with their own Jira Cloud instance
 - **Notifications:** Email via Resend, sending the full report to the
   address a scan was submitted with; Slack (an incoming-webhook alert on
   escalation, a summary on completion) exists in code as an opt-in,
   neither is required
 - **Security:** the crawler refuses to fetch private/internal network
-  addresses; an access-code gate (Secret Manager) on the SME review queue
-  exists and fails *closed* if unconfigured, for anyone who wants to run
-  a private instance instead of a public one
-- **Testing:** pytest, 330+ tests covering the pure logic, the LLM-output
+  addresses; an access-code gate (Secret Manager) on the internal review
+  queue exists and fails closed if unconfigured, for anyone who wants to
+  run a private instance instead of a public one
+- **Testing:** pytest, 400+ tests covering the pure logic, the LLM-output
   validation boundary, and the FastAPI routes that don't need live GCP —
   see [Running the tests](#running-the-tests)
 
@@ -273,9 +210,7 @@ export PROJECT_ID=YOUR_PROJECT_ID
 `setup.sh` runs every gcloud command in steps 2 through 10 below, in
 order, idempotently (safe to re-run after a partial failure — it checks
 whether each resource exists before creating it). It ends with a working
-public instance at your own Cloud Run URL. The step-by-step walkthrough
-below is for understanding what it's doing, customizing a step, or
-running things by hand instead.
+public instance at your own Cloud Run URL.
 
 The numbered steps below are what `setup.sh` automates — read them if you
 want to understand what it's doing, customize a step, or run things by
@@ -312,6 +247,32 @@ The Firestore database name is non-default (`scan-firestore`) on purpose,
 so every Firestore client in this codebase passes `database="scan-firestore"`
 explicitly. Easy to forget if you're used to the client library's default;
 connects to an empty database if missed.
+
+Then turn on the retention the privacy page describes. **This is not
+optional if you are running this publicly** — the code writes an
+`expires_at` timestamp on every record, but Firestore only acts on it
+when a TTL policy exists on that field, and the report HTML in Cloud
+Storage has no expiry of its own at all:
+
+```bash
+for c in scan_jobs escalations feedback usage_counters \
+         email_verifications verified_devices; do
+  gcloud firestore fields ttls update expires_at \
+    --collection-group="$c" --database=scan-firestore --enable-ttl --async
+done
+
+cat > /tmp/reports-lifecycle.json <<'JSON'
+{"lifecycle": {"rule": [
+  {"action": {"type": "Delete"},
+   "condition": {"age": 365, "matchesPrefix": ["reports/"]}}
+]}}
+JSON
+gcloud storage buckets update "gs://${PROJECT_ID}-reports" \
+  --lifecycle-file=/tmp/reports-lifecycle.json
+```
+
+The 365 days matches `firestore_client.SCAN_RECORD_RETENTION_DAYS` — change
+them together. `setup.sh` runs all of this for you.
 
 ### 4. Authenticate locally and confirm Vertex AI works
 
@@ -424,8 +385,8 @@ gcloud run deploy scan-onboarding \
 
 No review access code is required by default (`MAD_REVIEW_CODE` unset) —
 this deploys a fully public, free instance, matching the live one above,
-and the SME review queue simply refuses everyone until you configure one
-(it fails *closed*, not open). If you want a private review queue, set
+and the internal review queue simply refuses everyone until you configure
+one (it fails closed, not open). If you want a private review queue, set
 `MAD_REVIEW_CODE` as a Secret Manager secret and pass it with
 `--set-secrets` (see `mad_platform/config.py`'s `review_code()` for the
 exact variable name).
@@ -586,9 +547,6 @@ GCP clients lazily (see `mad_platform/config.py` and the accessor
 functions in `mad_platform/state/`, `mad_platform/tools/`), so importing
 and testing the pure logic, the LLM-output validation boundary, and the
 routes that don't need a live backend costs nothing and needs nothing.
-What isn't covered here — real Firestore transaction behavior under
-contention, the actual Cloud Tasks dispatch, live model calls — is called
-out explicitly in `CODE_REVIEW_FIXES.md`.
 
 ## Project structure
 
@@ -602,10 +560,10 @@ mad_platform/
                   # anti-abuse pre-filters, SSRF-safe URL guard, retry
                   # classification, untrusted-content delimiting
   state/         # Firestore + Cloud Storage clients (lazy singletons)
-  web/           # scan-onboarding's app (submission UI, status page, SME
-                  # review queue, open feedback form), scan-worker's app
-                  # (the pipeline's push target), scan-wcag-poller's app,
-                  # shared theme/charts
+  web/           # scan-onboarding's app (submission UI, status page,
+                  # internal review queue, open feedback form),
+                  # scan-worker's app (the pipeline's push target),
+                  # scan-wcag-poller's app, shared theme/charts
   data/          # Curated WCAG success-criteria corpus
   severity.py    # The severity vocabulary, defined once (a real Literal
                   # type, not five independently-drifting string lists)
@@ -618,7 +576,7 @@ tests/           # pytest suite -- pure logic, LLM-boundary validation,
                   # and routes that don't need live GCP (see above)
 setup.sh                       # One-command deploy -- automates the numbered steps above
 run_scan.py                    # CLI entry point for a one-time scan
-review_escalations.py          # SME review queue CLI (web UI is the primary surface)
+review_escalations.py          # Internal review queue CLI (web UI is the primary surface)
 check_wcag_version.py          # Manual trigger for the WCAG freshness check
 mine_patterns.py               # Manual trigger for the pattern miner
 Dockerfile                     # scan-onboarding -- no Playwright, thin and cheap
@@ -635,38 +593,15 @@ scan. If it saved you the cost of a manual audit, you can leave a tip at
 link to the same page is in the site footer and on every completed
 report.
 
-## Scalability & roadmap
+## License
 
-What's built today is the product layer: check a site's accessibility
-on-demand, one-time, no registration, running behind a real queue so
-traffic bursts degrade to a wait, not a failure. The natural next layer is
-registering a site for *recurring* monitoring instead of a single scan,
-and it's a smaller step than it sounds, since the scheduling and
-self-improvement infrastructure it would reuse is already running in
-production: the WCAG freshness check and the pattern-miner both
-already operate as independent Cloud Scheduler ticks against live state,
-not one-off scripts.
+[GNU Affero General Public License v3.0](LICENSE) (AGPL-3.0).
 
-Two real problems would need solving first, not just wiring a cron job:
-making a recurring scan's ticket-filing idempotent across separate runs
-(today's idempotency guard is per-scan, not per-site-over-time), and
-deciding how the SME review queue should weigh a site's own review
-history, so a pattern a reviewer already confirmed on that site doesn't
-re-escalate identically on every future run.
-
-An internal code-review audit also ran against this codebase, in two
-passes: `CODE_REVIEW_FINDINGS.md` and `CODE_REVIEW_FIXES.md` (both
-gitignored, kept locally, not published) track the full list and the
-reasoning behind each fix. Highlights: closed a same-hackathon-project GCP
-config fallback, made every module's GCP clients lazy so an actual test
-suite could exist, closed a race between a scan being marked complete and
-its summary being written, added bounds checking on every LLM-returned
-index, fixed an escalation idempotency-key collision between different
-users' scans, made the anti-abuse quota check a real Firestore
-transaction, closed a fail-open bug in the SME review queue's access
-gate, hardened the crawler's SSRF guard against redirects, delimited
-scanned-site HTML before it reaches any prompt, and moved all four
-container images to a non-root user on a digest-pinned base image.
+AGPL rather than MIT or Apache-2.0 because this is a network service, and
+AGPL carries the obligation across that boundary: anyone who runs a
+modified version of this code as a hosted service has to make their
+source available to its users, not just to people they distribute a
+binary to.
 
 ## Built during the hackathon submission window
 

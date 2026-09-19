@@ -46,14 +46,10 @@ def read_report(job_id: str) -> str | None:
     return blob.download_as_text() if blob.exists() else None
 
 
-def console_object_url(job_id: str) -> str:
-    """Cloud Console link to the specific report object -- opens a preview/
-    download UI, requires the viewer to be logged into the GCP project.
-    """
-    return (
-        f"https://console.cloud.google.com/storage/browser/_details/"
-        f"{config.gcs_bucket_name()}/reports/{job_id}.html?project={config.project_id()}"
-    )
+# console_object_url() used to sit here -- a per-report Cloud Console deep
+# link with no callers anywhere in mad_platform/, tests/ or the root
+# scripts. console_folder_url() below is the one that is actually used (in
+# ScanResult), and it does the same job for the standing case.
 
 
 def console_folder_url() -> str:

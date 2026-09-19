@@ -24,8 +24,10 @@ to be reached from inside our network:
 
 from __future__ import annotations
 
+import asyncio
 import ipaddress
 import socket
+from concurrent.futures import ThreadPoolExecutor
 from functools import lru_cache
 from urllib.parse import urlparse
 
@@ -113,3 +115,66 @@ def is_safe_target(url: str) -> bool:
     except UnsafeTargetError:
         return False
     return True
+
+
+# ---- Running these checks from async code, without poisoning the process.
+#
+# `socket.getaddrinfo` is a blocking C call with no timeout parameter, and
+# `socket.setdefaulttimeout` does not reach it. `asyncio.wait_for` around
+# an `asyncio.to_thread` therefore bounds the *response*, not the work:
+# cancelling the awaitable abandons the coroutine while the resolution runs
+# to completion in whatever executor it landed in.
+#
+# That is tolerable in itself. What was not tolerable is where it landed:
+# the default executor, capped at `min(32, cpu_count + 4)` threads and
+# shared with every other `asyncio.to_thread` in the process -- including
+# `editor.verify_findings`'s synchronous embedding call on the worker.
+# Under a burst of submissions naming hosts with slow or blackholed DNS,
+# abandoned resolutions accumulate there and, once it saturates, *every*
+# to_thread on that instance queues behind them. A slow-DNS attack that
+# should have degraded one request degraded the whole instance.
+#
+# A dedicated, bounded pool contains that: a saturated DNS pool now slows
+# only DNS. It does not make the thread cancellable -- nothing short of a
+# resolver library that owns its own sockets would -- and the caller's
+# `wait_for` is still what gives the visitor an answer. The honest summary
+# is that the timeout is a response deadline and the pool is the blast
+# radius, and the two are now separate things rather than one thing
+# pretending to be both.
+#
+# 8 workers: enough that a page pulling subresources from a handful of
+# hosts never queues in practice (the lru_cache above means one lookup per
+# host, not per request), small enough to be a meaningful ceiling.
+_DNS_EXECUTOR = ThreadPoolExecutor(max_workers=8, thread_name_prefix="mad-dns")
+
+
+async def assert_safe_target_async(url: str, timeout: float | None = None) -> None:
+    """`assert_safe_target` off the event loop, on the DNS pool.
+
+    Raises `UnsafeTargetError` as the sync version does, and
+    `asyncio.TimeoutError` if `timeout` elapses first -- the caller decides
+    what to show for each, since they mean different things to a visitor.
+    """
+    loop = asyncio.get_running_loop()
+    call = loop.run_in_executor(_DNS_EXECUTOR, assert_safe_target, url)
+    if timeout is None:
+        await call
+        return
+    await asyncio.wait_for(call, timeout=timeout)
+
+
+async def is_safe_target_async(url: str) -> bool:
+    """Boolean form, for the per-request Playwright guard."""
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(_DNS_EXECUTOR, is_safe_target, url)
+
+
+def dns_executor() -> ThreadPoolExecutor:
+    """The shared bounded pool above, for other callers with their own
+    blocking `getaddrinfo` -- abuse_guard.email_looks_valid is the other
+    one in this codebase. The point of the pool is the shared ceiling, so
+    a second blocking-DNS caller belongs on this one, not a pool of its
+    own (which would just relocate the saturation risk) or the process
+    default executor (which is the thing this was built to get off of).
+    """
+    return _DNS_EXECUTOR

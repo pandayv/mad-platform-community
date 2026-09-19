@@ -77,5 +77,7 @@ async def analyze_page(snapshot: PageSnapshot) -> list[RawFinding]:
     return findings
 
 
-def analyze_page_sync(snapshot: PageSnapshot) -> list[RawFinding]:
-    return asyncio.run(analyze_page(snapshot))
+# analyze_page_sync() used to sit here -- same story as
+# crawler.fetch_page_sync: an asyncio.run() wrapper with no callers, which
+# could only be reached from inside an already-running loop, where it
+# raises.

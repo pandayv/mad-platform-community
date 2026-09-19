@@ -23,6 +23,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import html
+import ipaddress
 import json
 import logging
 import os
@@ -34,8 +35,10 @@ from urllib.parse import quote, urlsplit
 import hmac
 from contextlib import asynccontextmanager
 from functools import lru_cache
+from typing import Literal
 
 import httpx
+from bs4 import BeautifulSoup
 from fastapi import FastAPI, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
@@ -43,6 +46,7 @@ from google.api_core import exceptions as gcloud_exceptions
 from google.cloud import tasks_v2
 
 from mad_platform import config
+from mad_platform.logging_setup import configure_logging
 from mad_platform.agents.action_agent import resolve_escalation as resolve_finding_escalation
 from mad_platform.agents.pattern_miner import resolve_pattern_escalation
 from mad_platform.severity import SEVERITY_ORDER
@@ -50,22 +54,12 @@ from mad_platform.state import firestore_client as fs
 from mad_platform.state import storage_client
 from mad_platform.tools import abuse_guard, notify
 from mad_platform.tools.issue_sink import CsvIssueSink
-from mad_platform.tools.url_safety import UnsafeTargetError, assert_safe_target
+from mad_platform.tools import url_safety
+from mad_platform.tools.url_safety import UnsafeTargetError
 from mad_platform.web import theme
 
-# Not logging.basicConfig(): uvicorn configures its own logging on startup,
-# which runs after this module is imported and silently drops INFO-level
-# output from our own loggers on a cold start if we rely on basicConfig()
-# alone -- confirmed in production, phase logs vanished on cold-started
-# instances while uvicorn's own access logs kept working fine. Attaching a
-# handler directly to the "mad_platform" namespace, independent of the
-# root logger uvicorn manages, survives that.
-_handler = logging.StreamHandler()
-_handler.setFormatter(logging.Formatter("%(levelname)s:%(name)s:%(message)s"))
-_mad_logger = logging.getLogger("mad_platform")
-_mad_logger.setLevel(logging.INFO)
-_mad_logger.addHandler(_handler)
-_mad_logger.propagate = False
+# See mad_platform/logging_setup.py for why this is not basicConfig().
+configure_logging()
 
 logger = logging.getLogger("mad_platform.web")
 
@@ -90,6 +84,10 @@ async def _lifespan(_app: FastAPI):
 app = FastAPI(title="MAD Platform", lifespan=_lifespan)
 app.mount("/static", StaticFiles(directory=os.path.join(os.path.dirname(__file__), "static")), name="static")
 
+# What /static/* is served with. See _security_headers below for why this
+# exists at all and why it is a day rather than a year.
+_STATIC_CACHE_CONTROL = "public, max-age=86400"
+
 
 @app.middleware("http")
 async def _security_headers(request: Request, call_next):
@@ -112,13 +110,29 @@ async def _security_headers(request: Request, call_next):
     # browser free to apply its own heuristic caching -- and this app is
     # under active, frequent redesign, so a visitor's browser silently
     # showing a stale cached page (looking "wrong" compared to what's
-    # actually deployed) is a real, not theoretical, risk. /static/* assets
-    # (images, fonts) are the one thing that's actually fine to cache.
-    # /static/* assets and the content-hashed theme stylesheet set their own
-    # long-lived Cache-Control; everything else (every HTML page) is
-    # no-store. A content-hashed URL cannot go stale, so overwriting its
-    # header here would throw away the whole point of F9's fix.
-    if not (request.url.path.startswith("/static") or request.url.path == _THEME_CSS_PATH):
+    # actually deployed) is a real, not theoretical, risk. So: every HTML
+    # page is no-store, and the two things that are safe to cache are
+    # named explicitly here rather than merely exempted.
+    #
+    # The exemption used to be the whole fix, on the belief that
+    # `StaticFiles` sets its own long-lived header. It does not: Starlette's
+    # `FileResponse` emits `ETag` and `Last-Modified` and no `Cache-Control`
+    # at all (checked against both the installed source and a live
+    # response). So /static/* was exempted from no-store and given nothing
+    # in its place, which hands every browser the same heuristic-freshness
+    # guesswork this block calls a real risk for HTML -- over ~1.7 MB of
+    # unchanging PNGs, re-validated or re-fetched on the guess. The manual
+    # `?v=...` query busters on the homepage were covering for it.
+    #
+    # A day, not a year, and not `immutable`: these filenames are mutable,
+    # so a replaced og-image.png has to be able to reach visitors. The
+    # theme stylesheet is the opposite case -- its URL carries a hash of
+    # its content, so it can never go stale and gets the real forever
+    # header in `theme_css` below; overwriting that here would throw away
+    # the whole point of serving it at a content-hashed URL.
+    if request.url.path.startswith("/static"):
+        response.headers.setdefault("Cache-Control", _STATIC_CACHE_CONTROL)
+    elif request.url.path != _THEME_CSS_PATH:
         response.headers["Cache-Control"] = "no-store"
     return response
 
@@ -192,12 +206,14 @@ def _enqueue_scan(job_id: str) -> None:
 # which fails closed: an unset key here weakens one of several stacked
 # anti-abuse layers on a deliberately public form, while an unset code
 # there would publish an admin queue that is not meant to be public at all.
-_TURNSTILE_SITE_KEY = os.environ.get("TURNSTILE_SITE_KEY")
-_TURNSTILE_SECRET_KEY = os.environ.get("TURNSTILE_SECRET_KEY")
+# Both behind config getters, not module constants -- see
+# mad_platform/config.py's rule 2. Reading them at import time also meant a
+# test had to monkeypatch a private module attribute to exercise the gate.
 
 
 async def _turnstile_passed(token: str) -> bool:
-    if not _TURNSTILE_SECRET_KEY:
+    secret = config.turnstile_secret_key()
+    if not secret:
         return True
     if not token:
         return False
@@ -205,7 +221,7 @@ async def _turnstile_passed(token: str) -> bool:
         async with httpx.AsyncClient(timeout=5.0) as client:
             resp = await client.post(
                 "https://challenges.cloudflare.com/turnstile/v0/siteverify",
-                data={"secret": _TURNSTILE_SECRET_KEY, "response": token},
+                data={"secret": secret, "response": token},
             )
         resp.raise_for_status()
         return bool(resp.json().get("success"))
@@ -317,6 +333,106 @@ def _is_https(request: Request) -> bool:
     """
     return request.headers.get("x-forwarded-proto") == "https" or request.url.scheme == "https"
 
+
+# ---- Identifier shapes, validated once, before anything is looked up.
+#
+# /status/{job_id}, /report/{job_id}, /api/status/{job_id} and
+# /feedback?job= all handed a caller-supplied string straight to
+# fs.get_job() -> _jobs().document(job_id). Starlette percent-decodes path
+# params, so `GET /status/a%2Fb` arrives as "a/b", and
+# CollectionReference.document() rejects an odd segment count with a
+# ValueError -- an unhandled 500 where a 404 belongs, on public routes.
+# /feedback?job=a/b took the same path with no decoding needed.
+#
+# Noise-level on its own, and worth closing anyway: 500s from a public
+# route pollute the error budget you would otherwise use to spot real
+# failures, and "a document id must be a shape we produced" is a property
+# worth stating in one place rather than discovering per route.
+#
+# The shapes are exactly what this codebase generates:
+#   job ids           uuid.uuid4() strings          (firestore_client.create_job)
+#   escalation ids    16 hex chars, a sha256 prefix (action_agent.idempotency_key)
+_JOB_ID_RE = re.compile(r"\A[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\Z")
+_ESCALATION_ID_RE = re.compile(r"\A[0-9a-f]{16}\Z")
+
+
+def _valid_job_id(job_id: str) -> str:
+    """Returns the id, or raises 404 -- the same answer an unknown-but-
+    well-formed id gets, so this reveals nothing extra about what exists.
+    """
+    if not _JOB_ID_RE.match(job_id):
+        raise HTTPException(404, "No such job")
+    return job_id
+
+
+def _valid_escalation_id(escalation_id: str) -> str:
+    if not _ESCALATION_ID_RE.match(escalation_id):
+        raise HTTPException(404, "No such escalation")
+    return escalation_id
+
+
+# The only two dispositions either resolve route accepts.
+#
+# Both took `disposition: str` and passed it through to
+# action_agent.resolve_escalation / pattern_miner.resolve_pattern_escalation,
+# which `raise ValueError` on anything else -- a 500 on an authenticated
+# admin route and on the scan owner's scoped review link, where 400 is the
+# right answer. In the scoped case the 500 also arrived *after*
+# _scoped_escalation_or_404 had succeeded, so it confirmed the token was
+# valid. As a Literal, FastAPI rejects anything else with a 422 before the
+# handler body runs, and the two accepted values are stated in one place
+# rather than living only inside two `raise ValueError` lines.
+Disposition = Literal["confirm", "dismiss"]
+
+
+def _client_ip(request: Request) -> str:
+    """The visitor's own address, for everything that keys a rate limit on it.
+
+    Deliberately NOT `request.client.host`. That is the peer of the TCP
+    connection uvicorn accepted, and it is the same root cause `_is_https`
+    above already documents for the scheme: Cloud Run terminates the
+    connection at its own front end and forwards to the container, so the
+    container never sees the visitor's address on the socket. Keying a
+    per-IP counter on it fails in one of two directions -- every visitor
+    collapsing into one shared counter (a mystery "too many scans from
+    this network" outage for everyone), or a different value per
+    connection (no limit enforced at all). `X-Forwarded-For` is where the
+    address actually arrives.
+
+    The RIGHTMOST entry, not the leftmost. Cloud Run's front end *appends*
+    the connecting address to whatever the caller already sent, so a
+    request carrying a forged `X-Forwarded-For: 203.0.113.9` arrives here
+    as "203.0.113.9, <the real address>". The leftmost entry is therefore
+    attacker-chosen -- and it is exactly what uvicorn's own
+    `--proxy-headers --forwarded-allow-ips="*"` hands back (see
+    `uvicorn/middleware/proxy_headers.py`: `always_trust` returns
+    `hosts[0]`). For a counter whose entire job is to resist abuse, a
+    value the abuser picks is worse than no value, which is why that flag
+    is not the fix here. The last entry is written by Google and the
+    client cannot forge past it.
+
+    This assumes exactly one trusted hop in front of the container, which
+    is what this deployment has (a Cloud Run domain mapping -- no external
+    load balancer; see README's deploy steps). Putting an HTTPS load
+    balancer in front would add a hop and this would have to skip it.
+
+    The result is validated as a real IP literal before it is returned:
+    these values become Firestore document IDs (`_quota_refs`), and a
+    document ID must never be something a header can shape.
+    """
+    forwarded = request.headers.get("x-forwarded-for", "")
+    hops = [part.strip() for part in forwarded.split(",") if part.strip()]
+    # Local dev has no proxy in front, so the socket peer is the visitor
+    # there and is the correct last resort -- never the first choice.
+    peer = request.client.host if request.client else ""
+    for candidate in [*reversed(hops), peer]:
+        try:
+            return str(ipaddress.ip_address(candidate))
+        except ValueError:
+            continue
+    return "unknown"
+
+
 # ---- The theme stylesheet, served once and cached forever.
 #
 # It used to be inlined into all nine page templates, on every response,
@@ -358,7 +474,20 @@ async def theme_css() -> Response:
 # always point at the one production hostname regardless of which host
 # actually served the request (that's the whole mechanism -- it tells a
 # crawler "treat this URL, not the one you fetched me from, as canonical").
-_CANONICAL_ORIGIN = os.environ.get("MAD_APP_BASE_URL", "https://mad-platform.org").rstrip("/")
+# config.canonical_origin(), not a fourth os.environ.get of the same
+# variable. MAD_APP_BASE_URL had three readers with three behaviours --
+# raise-if-unset (config.app_base_url), default + rstrip("/") (here), and
+# default without rstrip (pattern_miner) -- so a deployment that set it
+# with a trailing slash produced "https://host.com//review/..." from one of
+# them and correct URLs from the other two. One getter now owns the
+# defaulting and the rstrip; see config.canonical_origin's docstring for
+# why it defaults where app_base_url raises.
+#
+# Still module-level rather than per-request: unlike the values config.py's
+# rule 2 is about, a *function call* is what is being deferred here, not an
+# environment read at import. These are two derived strings used in every
+# rendered page, and re-deriving them per request buys nothing.
+_CANONICAL_ORIGIN = config.canonical_origin()
 _DEFAULT_OG_IMAGE = f"{_CANONICAL_ORIGIN}/static/og-image.png"
 
 
@@ -379,7 +508,16 @@ def _head_meta(title: str, description: str, path: str, indexable: bool = True, 
     index, and the review queue specifically should never appear in a
     search result in the first place.
     """
-    canonical = f"{_CANONICAL_ORIGIN}{path}"
+    # `path` is escaped for the same reason `title` and `description` below
+    # are, and it was the only one of the three that was not. It goes into
+    # three href/content attributes, and status_page passes
+    # f"/status/{job_id}" where job_id is a caller-supplied URL path
+    # segment. Not currently reachable -- status_page 404s unless
+    # fs.get_job returns a document -- but that makes the safety a property
+    # of two other functions rather than of this one, which is exactly the
+    # shape of latent bug this codebase keeps rediscovering. One call to
+    # html.escape makes it local.
+    canonical = html.escape(f"{_CANONICAL_ORIGIN}{path}")
     robots = (
         '<meta name="robots" content="index, follow">'
         if indexable
@@ -410,6 +548,7 @@ def _head_meta(title: str, description: str, path: str, indexable: bool = True, 
 {og_desc_tags}
 <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
 <link rel="icon" href="/static/favicon-32.png" sizes="32x32" type="image/png">
+<link rel="icon" href="/static/favicon-16.png" sizes="16x16" type="image/png">
 <link rel="apple-touch-icon" href="/static/apple-touch-icon.png">
 <link rel="manifest" href="/static/site.webmanifest">
 <meta name="theme-color" content="#0B6E66">
@@ -522,22 +661,36 @@ def _site_footer() -> str:
 
 def _render_form(error: str | None = None, device_verified: bool = False) -> str:
     error_html = f'<div class="error-box">{html.escape(error)}</div>' if error else ""
+    site_key = config.turnstile_site_key()
     turnstile_script = (
         '<script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>'
-        if _TURNSTILE_SITE_KEY
+        if site_key
         else ""
     )
-    turnstile_widget = f'<div class="cf-turnstile" data-sitekey="{_TURNSTILE_SITE_KEY}"></div>' if _TURNSTILE_SITE_KEY else ""
+    turnstile_widget = f'<div class="cf-turnstile" data-sitekey="{html.escape(site_key)}"></div>' if site_key else ""
     # Organization + WebSite JSON-LD -- homepage only, not repeated on
     # every page. Gives search engines and AI answer engines a structured,
     # unambiguous identity for the project (name, description, the one
     # canonical URL) instead of having to infer it from prose alone.
-    structured_data = f"""<script type="application/ld+json">
-{{"@context":"https://schema.org","@graph":[
-{{"@type":"Organization","name":"MAD Platform","url":"{_CANONICAL_ORIGIN}/","logo":"{_CANONICAL_ORIGIN}/static/icon-512.png","description":"A free, self-serve, open-source tool that scans websites for accessibility issues and provides actionable fixes.","sameAs":["https://github.com/pandayv/mad-platform-community"]}},
-{{"@type":"WebSite","name":"MAD Platform","url":"{_CANONICAL_ORIGIN}/"}}
-]}}
-</script>"""
+    structured_data = _jsonld_script(
+        {
+            "@context": "https://schema.org",
+            "@graph": [
+                {
+                    "@type": "Organization",
+                    "name": "MAD Platform",
+                    "url": f"{_CANONICAL_ORIGIN}/",
+                    "logo": f"{_CANONICAL_ORIGIN}/static/icon-512.png",
+                    "description": (
+                        "A free, self-serve, open-source tool that scans websites for "
+                        "accessibility issues and provides actionable fixes."
+                    ),
+                    "sameAs": ["https://github.com/pandayv/mad-platform-community"],
+                },
+                {"@type": "WebSite", "name": "MAD Platform", "url": f"{_CANONICAL_ORIGIN}/"},
+            ],
+        }
+    )
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -569,7 +722,7 @@ def _render_form(error: str | None = None, device_verified: bool = False) -> str
               <label class="sr-only" for="url">Website URL</label>
               <input id="url" type="text" inputmode="url" name="url" placeholder="Enter your website URL" autocapitalize="off" autocorrect="off" spellcheck="false" required autofocus>
             </div>
-            <button type="submit" class="scan-submit">Scan</button>
+            <button type="submit" class="btn scan-submit">Scan</button>
           </div>
           <input type="text" name="website" tabindex="-1" autocomplete="off" aria-hidden="true" style="position:absolute;left:-9999px;width:1px;height:1px;opacity:0">
           <input type="hidden" name="form_ts" value="{int(time.time())}">
@@ -617,11 +770,24 @@ def _render_form(error: str | None = None, device_verified: bool = False) -> str
                 <span>18 issues across 6 pages</span>
               </div>
             </div>
+            <!-- Literal hex from theme.DARK_HEX, not var(--crit)/(--high)/
+                 (--med)/(--low). This panel is a fixed dark card whatever
+                 the page theme (theme.py's .example-chip block explains
+                 why), so a theme-reactive token resolved against it is the
+                 same bug that block already documents -- and in the
+                 DEFAULT light theme the light-palette values measured
+                 2.11:1 (low) and 2.54:1 (critical) against the row's
+                 #1E2425, below WCAG's 3:1 minimum for a non-text UI
+                 component. The dark-palette values clear it 4.78:1 to
+                 8.77:1. aria-hidden means this is not an assistive-tech
+                 problem; it is the first thing a sighted visitor sees, on
+                 the hero of an accessibility product, three sections above
+                 a table claiming the tool catches contrast problems. -->
             <div class="example-sev-rows">
-              <div class="example-sev-row"><span class="dot" style="background:var(--crit)"></span>Critical<b>2</b></div>
-              <div class="example-sev-row"><span class="dot" style="background:var(--high)"></span>High<b>5</b></div>
-              <div class="example-sev-row"><span class="dot" style="background:var(--med)"></span>Medium<b>8</b></div>
-              <div class="example-sev-row"><span class="dot" style="background:var(--low)"></span>Low<b>3</b></div>
+              <div class="example-sev-row"><span class="dot" style="background:{theme.DARK_HEX['--crit']}"></span>Critical<b>2</b></div>
+              <div class="example-sev-row"><span class="dot" style="background:{theme.DARK_HEX['--high']}"></span>High<b>5</b></div>
+              <div class="example-sev-row"><span class="dot" style="background:{theme.DARK_HEX['--med']}"></span>Medium<b>8</b></div>
+              <div class="example-sev-row"><span class="dot" style="background:{theme.DARK_HEX['--low']}"></span>Low<b>3</b></div>
             </div>
           </div>
         </div>
@@ -747,7 +913,21 @@ def _render_form(error: str | None = None, device_verified: bool = False) -> str
     </div>
     <div class="arch-note">
       <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-3-6.7"/><path d="M21 3v5h-5"/></svg>
-      <div><b>Self-healing</b><span>Checks whether WCAG itself has changed and refreshes the ruleset automatically.</span></div>
+      <!-- "re-grounds its reference material", NOT "updates its rules
+           automatically". wcag_auto_heal.py's own docstring says what the
+           refresh actually is: re-embedding the curated corpus in
+           data/wcag_corpus.py and moving the stored version pointer. It
+           does not fetch new success-criteria text from W3C, and the
+           deterministic checks in tools/rule_checks.py are fixed Python
+           functions no refresh touches -- so a detected version change
+           re-embeds identical text and changes no rule. On the page whose
+           own section header is "What we actually checked, not marketing
+           copy", for a product whose pitch is being more honest than the
+           overlay vendors it cites an FTC fine against, that was the
+           largest gap in the repo between the marketing surface and the
+           code -- and the one a skeptical reader can check against the
+           public source in five minutes. -->
+      <div><b>Self-healing</b><span>Watches for a new version of the WCAG standard and re-grounds its reference material when one lands.</span></div>
     </div>
   </div>
 </section>
@@ -803,11 +983,19 @@ def _render_form(error: str | None = None, device_verified: bool = False) -> str
           <th scope="row">Audio/video captions</th>
           <td class="mad-col"><span class="mark-yes" aria-hidden="true">&check;</span><span class="sr-only">Yes</span></td>
           <td><span class="mark-no" aria-hidden="true">&cross;</span><span class="sr-only">No</span></td>
-          <td><span class="mark-no" aria-hidden="true">&cross;</span><span class="sr-only">Rarely</span></td>
+          <!-- WCAG 1.3.1: the accessible name has to convey the same
+               information as the visual presentation. This cell showed an
+               unqualified cross while announcing "Rarely" -- a materially
+               softer claim heard only by a screen-reader user. Resolved in
+               the direction that is less flattering to this column, using
+               the same .mark-partial pattern the other hedged cells use,
+               where the visible text IS the accessible name and the two
+               cannot disagree by construction. -->
+          <td><span class="mark-partial">Rarely</span></td>
         </tr>
         <tr>
           <th scope="row">Filters out false positives</th>
-          <td class="mad-col"><span class="mark-yes" aria-hidden="true">&check;</span><span class="sr-only">Yes, automatic</span></td>
+          <td class="mad-col"><span class="mark-yes" aria-hidden="true">&check;</span><span class="sr-only">Yes</span></td>
           <td><span class="mark-no" aria-hidden="true">&cross;</span><span class="sr-only">No</span></td>
           <td><span class="mark-partial">Add-on only<sup>3</sup></span></td>
         </tr>
@@ -819,7 +1007,7 @@ def _render_form(error: str | None = None, device_verified: bool = False) -> str
         </tr>
         <tr>
           <th scope="row">Follows latest standards</th>
-          <td class="mad-col"><span class="mark-yes" aria-hidden="true">&check;</span><sup>5</sup><span class="sr-only">Yes, automatic</span></td>
+          <td class="mad-col"><span class="mark-yes" aria-hidden="true">&check;</span><sup>5</sup><span class="sr-only">Yes</span></td>
           <td><span class="mark-partial">Often outdated</span></td>
           <td><span class="mark-partial">Varies by vendor</span></td>
         </tr>
@@ -831,7 +1019,11 @@ def _render_form(error: str | None = None, device_verified: bool = False) -> str
     <p><sup>2</sup> Rule-based scanners check the underlying code; they don't evaluate what the page actually looks like once it renders.</p>
     <p><sup>3</sup> Automated scanners are well known for flagging non-issues; catching what they get wrong is typically a separate paid add-on for these tools.</p>
     <p><sup>4</sup> The FTC fined a major overlay-widget vendor $1M in 2025 for overstating what its auto-fix could actually do.</p>
-    <p><sup>5</sup> MAD Platform checks the accessibility standard (WCAG) for changes and updates its rules automatically.</p>
+    <!-- Not "updates its rules automatically" -- the refresh path
+         re-embeds the same curated corpus against a new version pointer;
+         it does not change what any check does. See the "Self-healing"
+         card above for the same fact stated the same way. -->
+    <p><sup>5</sup> MAD Platform checks the accessibility standard (WCAG) for changes and keeps its knowledge base current.</p>
   </div>
 </section>
 </main>
@@ -1011,7 +1203,7 @@ def _render_email_step(url: str, error: str | None = None) -> str:
         </div>
         <input type="text" name="website" tabindex="-1" autocomplete="off" aria-hidden="true" style="position:absolute;left:-9999px;width:1px;height:1px;opacity:0">
         <input type="hidden" name="form_ts" value="{int(time.time())}">
-        <button type="submit" class="scan-submit">Send verification code &rarr;</button>
+        <button type="submit" class="btn scan-submit">Send verification code &rarr;</button>
       </form>
     """
     footnote = (
@@ -1035,7 +1227,7 @@ def _render_code_step(url: str, email: str, error: str | None = None) -> str:
           <label class="sr-only" for="code">Verification code</label>
           <input id="code" type="text" name="code" placeholder="6-digit code" inputmode="numeric" pattern="[0-9]*" maxlength="6" required autofocus autocomplete="one-time-code">
         </div>
-        <button type="submit" class="scan-submit">Verify &amp; scan &rarr;</button>
+        <button type="submit" class="btn scan-submit">Verify &amp; scan &rarr;</button>
       </form>
       <div class="tagline" style="margin:16px 0 0;display:flex;justify-content:space-between">
         <form action="/scan/request-code" method="post" style="display:inline">
@@ -1321,7 +1513,33 @@ poll();
 """
 
 
-_FAQ_ITEM_RE = re.compile(r"<li>\s*<h3>(.*?)</h3>\s*<p>(.*?)</p>", re.DOTALL)
+def _jsonld_script(payload: dict) -> str:
+    """One JSON-LD block, with the one escape `json.dumps` does not do.
+
+    `json.dumps` escapes quotes and backslashes but leaves `<` and `/`
+    alone, and the result goes inside a `<script>` element, where the HTML
+    parser looks for the literal string "</script" before any JSON parsing
+    happens. An answer containing it would terminate the block early and
+    spill the rest of the JSON into the page as text. Escaping `<` as
+    `\\u003c` is the standard containment (it is still the same string
+    after JSON parsing, so consumers see no difference) and it is applied
+    here, once, rather than at each call site -- there are two already.
+    """
+    return (
+        '<script type="application/ld+json">\n'
+        + json.dumps(payload, separators=(",", ":")).replace("<", "\\u003c")
+        + "\n</script>"
+    )
+
+
+# Every FAQ answer must be at least this long to count as an answer. Not a
+# style rule -- Google treats an acceptedAnswer.text that does not answer
+# its question as a structured-data quality problem, and the failure this
+# guards against produced a 66-character colon-terminated fragment ("You
+# can support the project and the community in one or more ways:") because
+# the extractor stopped at the first </p> and dropped the <ul> holding the
+# actual answer. The shortest real answer on the page is ~160 characters.
+_MIN_FAQ_ANSWER_CHARS = 100
 
 
 def _faqpage_jsonld(faq_html: str) -> str:
@@ -1333,24 +1551,54 @@ def _faqpage_jsonld(faq_html: str) -> str:
     Deriving it from the same markup means there is only one place the
     text can change.
 
-    Takes each <li><h3>question</h3><p>answer...</p> pair (the answer's
-    own inner tags -- links, the one nested <ul> in the "how to support"
-    item -- are stripped to plain text; schema.org's Answer.text wants
-    text, not markup).
+    Parsed, not regexed. The previous `<li>\\s*<h3>(.*?)</h3>\\s*<p>(.*?)</p>`
+    broke that guarantee in two directions at once, and the mechanism
+    exists precisely so the visible FAQ and the JSON-LD cannot drift:
+
+    - It stopped at the first `</p>`, so the twelfth item -- whose answer
+      is a lead-in paragraph followed by a `<ul>` -- published only the
+      lead-in: "You can support the project and the community in one or
+      more ways:", a colon-terminated fragment that answers nothing.
+    - It matched `<li>` and `<h3>` only in their bare, attribute-less
+      form, so a future `<li class="...">` would drop that item from the
+      structured data silently: no error, no log line, nothing to notice.
+
+    BeautifulSoup is already a dependency and already used this way in
+    `orchestrator._extract_candidate_links`. Every element after the `h3`
+    contributes its text, so a list, a second paragraph or a table all
+    survive; `get_text(" ")` keeps a word boundary where tags met.
     """
-    items = []
-    for question, answer_html in _FAQ_ITEM_RE.findall(faq_html):
-        question_text = html.unescape(re.sub(r"<[^>]+>", "", question)).strip()
-        answer_text = html.unescape(re.sub(r"<[^>]+>", "", answer_html))
-        answer_text = " ".join(answer_text.split())
-        items.append(
-            '{"@type":"Question","name":%s,"acceptedAnswer":{"@type":"Answer","text":%s}}'
-            % (json.dumps(question_text), json.dumps(answer_text))
+    soup = BeautifulSoup(faq_html, "html.parser")
+    entities = []
+    for item in soup.select("ol.trust-list > li, ul.trust-list > li"):
+        heading = item.find("h3")
+        if heading is None:
+            continue
+        question = " ".join(heading.get_text(" ").split())
+        answer = " ".join(
+            " ".join(
+                sibling.get_text(" ") if hasattr(sibling, "get_text") else str(sibling)
+                for sibling in heading.next_siblings
+            ).split()
         )
-    return (
-        '<script type="application/ld+json">\n'
-        '{"@context":"https://schema.org","@type":"FAQPage","mainEntity":[' + ",".join(items) + "]}\n"
-        "</script>"
+        if not question or len(answer) < _MIN_FAQ_ANSWER_CHARS:
+            # Loud rather than silent: the whole point of deriving this from
+            # the rendered markup is that a page edit cannot quietly empty
+            # it out. tests/test_seo_metadata.py asserts this never fires.
+            logger.warning(
+                "FAQ JSON-LD: skipping %r -- answer is %d characters, below the %d minimum",
+                question[:60], len(answer), _MIN_FAQ_ANSWER_CHARS,
+            )
+            continue
+        entities.append(
+            {
+                "@type": "Question",
+                "name": question,
+                "acceptedAnswer": {"@type": "Answer", "text": answer},
+            }
+        )
+    return _jsonld_script(
+        {"@context": "https://schema.org", "@type": "FAQPage", "mainEntity": entities}
     )
 
 
@@ -1761,7 +2009,15 @@ async def _safe_url_or_error(url: str) -> tuple[str | None, str | None]:
         if scheme not in ("http", "https"):
             return None, "Please enter an http:// or https:// website URL."
     try:
-        await asyncio.wait_for(asyncio.to_thread(assert_safe_target, url), timeout=3.0)
+        # assert_safe_target_async, not asyncio.to_thread: the blocking
+        # getaddrinfo inside it cannot be cancelled, so an abandoned
+        # resolution runs to completion wherever it landed. On the default
+        # executor that meant a slow-DNS burst could saturate the pool
+        # every other asyncio.to_thread in the process shares -- including
+        # editor.verify_findings' embedding call on the worker. The DNS
+        # pool in url_safety bounds that; the timeout below is still what
+        # gives this visitor an answer. See url_safety's own comment.
+        await url_safety.assert_safe_target_async(url, timeout=3.0)
     except UnsafeTargetError:
         return None, "Please enter a public website URL we can actually reach."
     except asyncio.TimeoutError:
@@ -1776,7 +2032,7 @@ async def _start_scan(request: Request, url: str, email: str) -> Response:
     (POST /scan/verify-code). Same quota check either path -- verification
     proves an inbox is real, it isn't a bypass for the scan budget.
     """
-    client_ip = request.client.host if request.client else "unknown"
+    client_ip = _client_ip(request)
     allowed, reason = fs.check_and_reserve_scan_quota(email, client_ip)
     if not allowed:
         return HTMLResponse(_render_form(error=reason), status_code=429)
@@ -1798,7 +2054,7 @@ async def _start_scan(request: Request, url: str, email: str) -> Response:
         # already queued. That is success, not failure -- the dedup guard
         # doing its job.
         logger.info("[%s] Task already queued -- treating as enqueued", job_id)
-    except Exception as exc:  # noqa: BLE001 - every failure mode here needs the same cleanup
+    except Exception:  # noqa: BLE001 - every failure mode here needs the same cleanup
         logger.exception("[%s] Could not enqueue scan", job_id)
         fs.fail_job(job_id, "We couldn't start this scan. Nothing was charged against your daily limit.")
         fs.refund_scan_quota(email, client_ip)
@@ -1859,8 +2115,11 @@ async def scan_request_code(
 
     email = email.strip()
     try:
+        # email_looks_valid_async, not asyncio.to_thread: the same
+        # dedicated-DNS-pool reasoning as _safe_url_or_error just above --
+        # see url_safety's module comment.
         email_ok, email_reason = await asyncio.wait_for(
-            asyncio.to_thread(abuse_guard.email_looks_valid, email), timeout=3.0
+            abuse_guard.email_looks_valid_async(email), timeout=3.0
         )
     except asyncio.TimeoutError:
         return HTMLResponse(
@@ -1897,6 +2156,16 @@ async def scan_verify_code(request: Request, url: str = Form(...), email: str = 
     if url_error:
         return HTMLResponse(_render_form(error=url_error), status_code=400)
 
+    # Checked before the code is, not after: this is the ceiling on how
+    # many guesses one address gets per day, and a guess that is never
+    # compared costs nothing to refuse. The per-code counter inside
+    # fs.verify_email_code bounds guesses against a single code; a fresh
+    # code request resets that counter by design, so without this an
+    # attacker's guess budget was simply "requests they can send".
+    allowed, reason = fs.check_and_reserve_code_attempt_quota(_client_ip(request))
+    if not allowed:
+        return HTMLResponse(_render_code_step(url, email.strip(), error=reason), status_code=429)
+
     email = email.strip()
     if not fs.verify_email_code(email, code.strip()):
         return HTMLResponse(
@@ -1911,7 +2180,7 @@ async def scan_verify_code(request: Request, url: str = Form(...), email: str = 
 
 @app.get("/status/{job_id}", response_class=HTMLResponse)
 async def status_page(job_id: str) -> str:
-    job = fs.get_job(job_id)
+    job = fs.get_job(_valid_job_id(job_id))
     if job is None:
         raise HTTPException(404, "No such job")
     # _STATUS_PAGE is a plain string, not an f-string -- it can't be one,
@@ -1935,7 +2204,7 @@ async def status_page(job_id: str) -> str:
 
 @app.get("/api/status/{job_id}")
 async def api_status(job_id: str) -> JSONResponse:
-    job = fs.get_job(job_id)
+    job = fs.get_job(_valid_job_id(job_id))
     if job is None:
         raise HTTPException(404, "No such job")
     created_at = job.get("created_at")
@@ -1957,6 +2226,22 @@ async def api_status(job_id: str) -> JSONResponse:
 
 @app.get("/report/{job_id}")
 async def get_report(job_id: str, download: int = 0) -> Response:
+    _valid_job_id(job_id)
+    # The job document is consulted before the blob is served, and that is
+    # a retention control rather than an authorization one.
+    #
+    # The stored report *is* the scan record in every sense that matters to
+    # a user: the URL they submitted, every finding, the suggested fixes,
+    # and the scan's review token embedded in its status badges. This route
+    # used to fetch the blob directly and never look at the job at all, so
+    # once Firestore's TTL removed the job document the report went on
+    # being served indefinitely -- and a deletion request handled by
+    # removing the Firestore document left the report live. The bucket now
+    # carries a matching lifecycle rule (see README step 3 and setup.sh),
+    # and this makes expiry effective at the route immediately rather than
+    # only once the bucket's daily sweep gets to the object.
+    if fs.get_job(job_id) is None:
+        raise HTTPException(404, "Report not found")
     content = storage_client.read_report(job_id)
     if content is None:
         raise HTTPException(404, "Report not found (job may not be complete yet)")
@@ -1966,7 +2251,7 @@ async def get_report(job_id: str, download: int = 0) -> Response:
 
 @app.get("/report/{job_id}/tickets.csv")
 async def get_tickets_csv(job_id: str) -> Response:
-    job = fs.get_job(job_id)
+    job = fs.get_job(_valid_job_id(job_id))
     if job is None or not job.get("summary"):
         raise HTTPException(404, "Report not found (job may not be complete yet)")
     csv_text = job["summary"].get("csv_export", "")
@@ -1998,7 +2283,7 @@ def _render_feedback_page(
     """One form, reachable from four places (the FAQ, the completed-scan
     view, the stored report, and the report email) rather than four
     slightly-different implementations -- open to anyone, not gated behind
-    a scan's review token. The token gate F5 (CODE_REVIEW_FINDINGS.md)
+    a scan's review token. The token gate an earlier review pass
     added was fixing unbounded writes and a caller-controlled publish
     flag, not "no proof you scanned something"; reusing a hard-to-guess
     job_id as a loose reference when one exists costs nothing and needs no
@@ -2052,7 +2337,7 @@ def _render_feedback_page(
         </div>
         <input type="text" name="website" tabindex="-1" autocomplete="off" aria-hidden="true" style="position:absolute;left:-9999px;width:1px;height:1px;opacity:0">
         <input type="hidden" name="form_ts" value="{int(time.time())}">
-        <button type="submit" class="scan-submit">Send feedback</button>
+        <button type="submit" class="btn scan-submit">Send feedback</button>
       </form>
       <script>
       (function(){{
@@ -2075,7 +2360,12 @@ def _render_feedback_page(
 @app.get("/feedback", response_class=HTMLResponse)
 async def feedback_page(job: str = "") -> str:
     url = ""
-    if job:
+    # _JOB_ID_RE rather than _valid_job_id: this route already degrades to
+    # the plain form for a stale or tampered job param instead of 404ing,
+    # so a malformed one should degrade identically -- not raise, and not
+    # reach _jobs().document(), which rejects an embedded "/" with a
+    # ValueError (an unhandled 500).
+    if job and _JOB_ID_RE.match(job):
         existing = fs.get_job(job)
         if existing:
             url = existing.get("url", "")
@@ -2129,7 +2419,7 @@ async def submit_feedback(
         )
     if len(comment) > _MAX_FEEDBACK_COMMENT or len(contact) > _MAX_FEEDBACK_CONTACT or len(url) > 2048:
         return HTMLResponse(_redisplay("That's a bit long -- please trim it and try again."), status_code=422)
-    client_ip = request.client.host if request.client else "unknown"
+    client_ip = _client_ip(request)
     allowed, reason = fs.check_and_reserve_feedback_quota(client_ip)
     if not allowed:
         return HTMLResponse(_redisplay(reason), status_code=429)
@@ -2149,7 +2439,7 @@ async def escalation_status(escalation_id: str) -> JSONResponse:
     internal deliberation -- nothing here would be a problem for a
     customer to see, unlike the review queue itself.
     """
-    escalation = fs.get_escalation(escalation_id)
+    escalation = fs.get_escalation(_valid_escalation_id(escalation_id))
     if escalation is None:
         raise HTTPException(404, "No such escalation")
     resolved = escalation.get("status") == "resolved"
@@ -2181,7 +2471,7 @@ def _render_review_login(error: str | None = None) -> str:
     <form action="/review/login" method="post">
       <label class="f-label" for="rcode">Review code</label>
       <input id="rcode" type="password" name="code" required autofocus autocomplete="off">
-      <div style="margin-top:14px"><button type="submit">Enter</button></div>
+      <div style="margin-top:14px"><button type="submit" class="btn">Enter</button></div>
     </form>
     {error_html}
   </div>
@@ -2289,7 +2579,12 @@ def _render_feedback_list(items: list[dict]) -> str:
 
 
 def _render_review_detail(e: dict, message: str | None = None) -> str:
-    eid = e["id"]
+    # Escaped, like the sibling list renderer at _render_review_list already
+    # does with the same value -- the inconsistency between the two was the
+    # tell. Escalation ids are server-generated sha256 prefixes, so this is
+    # latent rather than live; that guard is a property of idempotency_key,
+    # not of this function, and it goes into a form action= attribute here.
+    eid = html.escape(str(e["id"]))
     message_html = f'<div class="success-box">{html.escape(message)}</div>' if message else ""
 
     if e.get("kind") == "learned_pattern":
@@ -2329,10 +2624,10 @@ def _render_review_detail(e: dict, message: str | None = None) -> str:
     else:
         actions = f"""
           <form action="/review/{eid}/resolve" method="post" style="display:inline-block;margin-right:10px">
-            <button type="submit" name="disposition" value="confirm">Confirm</button>
+            <button type="submit" class="btn" name="disposition" value="confirm">Confirm</button>
           </form>
           <form action="/review/{eid}/resolve" method="post" style="display:inline-block">
-            <button type="submit" name="disposition" value="dismiss" class="btn-secondary">Dismiss</button>
+            <button type="submit" name="disposition" value="dismiss" class="btn btn-secondary">Dismiss</button>
           </form>
         """
 
@@ -2404,17 +2699,19 @@ async def review_login(request: Request, code: str = Form(...)) -> Response:
 async def review_detail(escalation_id: str, request: Request) -> Response:
     if not _is_reviewer(request):
         return HTMLResponse(_render_review_login())
-    escalation = fs.get_escalation(escalation_id)
+    escalation = fs.get_escalation(_valid_escalation_id(escalation_id))
     if escalation is None:
         raise HTTPException(404, "No such escalation")
     return HTMLResponse(_render_review_detail(escalation))
 
 
 @app.post("/review/{escalation_id}/resolve")
-async def review_resolve(escalation_id: str, request: Request, disposition: str = Form(...)) -> Response:
+async def review_resolve(
+    escalation_id: str, request: Request, disposition: Disposition = Form(...)
+) -> Response:
     if not _is_reviewer(request):
         return HTMLResponse(_render_review_login())
-    escalation = fs.get_escalation(escalation_id)
+    escalation = fs.get_escalation(_valid_escalation_id(escalation_id))
     if escalation is None:
         raise HTTPException(404, "No such escalation")
     if escalation.get("status") == "resolved":
@@ -2473,7 +2770,12 @@ def _render_scoped_review_list(job_id: str, token: str, pending: list[dict]) -> 
 
 
 def _render_scoped_review_detail(job_id: str, token: str, e: dict, message: str | None = None) -> str:
-    eid = e["id"]
+    # Escaped -- see _render_review_detail above. job_id and token are
+    # interpolated into the same action= attribute and get the same
+    # treatment for the same reason.
+    eid = html.escape(str(e["id"]))
+    job_id = html.escape(job_id)
+    token = html.escape(token)
     message_html = f'<div class="success-box">{html.escape(message)}</div>' if message else ""
     sev = str(e.get("severity", "medium")).lower()
     body = f"""
@@ -2495,10 +2797,10 @@ def _render_scoped_review_detail(job_id: str, token: str, e: dict, message: str 
             you've decided not to address); no ticket gets created for it.
           </div>
           <form action="/review/link/{job_id}/{token}/{eid}/resolve" method="post" style="display:inline-block;margin-right:10px">
-            <button type="submit" name="disposition" value="confirm">Confirm</button>
+            <button type="submit" class="btn" name="disposition" value="confirm">Confirm</button>
           </form>
           <form action="/review/link/{job_id}/{token}/{eid}/resolve" method="post" style="display:inline-block">
-            <button type="submit" name="disposition" value="dismiss" class="btn-secondary">Dismiss</button>
+            <button type="submit" name="disposition" value="dismiss" class="btn btn-secondary">Dismiss</button>
           </form>
         """
     return f"""<!DOCTYPE html>
@@ -2522,6 +2824,8 @@ def _render_scoped_review_detail(job_id: str, token: str, e: dict, message: str 
 
 
 def _scoped_escalation_or_404(job_id: str, token: str, escalation_id: str) -> dict:
+    _valid_job_id(job_id)
+    _valid_escalation_id(escalation_id)
     if not fs.verify_review_token(job_id, token):
         # Same 404 whether the job doesn't exist or the token's wrong --
         # a wrong-token guess should look identical to a nonexistent job,
@@ -2548,7 +2852,9 @@ async def scoped_review_detail(job_id: str, token: str, escalation_id: str) -> R
 
 
 @app.post("/review/link/{job_id}/{token}/{escalation_id}/resolve")
-async def scoped_review_resolve(job_id: str, token: str, escalation_id: str, disposition: str = Form(...)) -> Response:
+async def scoped_review_resolve(
+    job_id: str, token: str, escalation_id: str, disposition: Disposition = Form(...)
+) -> Response:
     escalation = _scoped_escalation_or_404(job_id, token, escalation_id)
     if escalation.get("status") == "resolved":
         return HTMLResponse(_render_scoped_review_detail(job_id, token, escalation, message="Already resolved."))

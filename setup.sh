@@ -84,6 +84,52 @@ else
   gcloud storage buckets create "gs://${GCS_BUCKET_NAME}" --location="$REGION"
 fi
 
+# ---- 2b. Retention: the privacy page's promise, made real ----
+#
+# The privacy page says a scan record "is kept for up to 12 months and
+# then removed", and that retention "is enforced automatically by the
+# database itself (a Firestore TTL policy, for anyone checking), not just
+# written here as a promise". Every collection below already writes an
+# `expires_at` field -- but a TTL *policy* has to exist in the project for
+# Firestore to act on it, and nothing in this repository created one. A
+# fresh deploy therefore produced a service that wrote expiry timestamps
+# and deleted nothing, under a page saying it deletes itself on schedule.
+#
+# The same gap existed on the other side: the stored report HTML in GCS
+# *is* the scan record in every sense that matters to a user (the URL,
+# every finding, the suggested fixes, the scan's review token), and it had
+# no expiry at all, so it outlived the Firestore document that referenced
+# it. 365 days here matches firestore_client.SCAN_RECORD_RETENTION_DAYS;
+# change them together.
+echo "==> Retention policies (Firestore TTL + GCS lifecycle)"
+for collection in scan_jobs escalations feedback usage_counters \
+                  email_verifications verified_devices; do
+  # Idempotent: re-running against an already-enabled field is a no-op.
+  gcloud firestore fields ttls update expires_at \
+    --collection-group="$collection" --database=scan-firestore \
+    --enable-ttl --async >/dev/null 2>&1 \
+    && echo "    TTL on ${collection}.expires_at" \
+    || echo "    TTL on ${collection}.expires_at (already set, or the collection does not exist yet)"
+done
+
+LIFECYCLE_JSON="$(mktemp)"
+cat > "$LIFECYCLE_JSON" <<'JSON'
+{
+  "lifecycle": {
+    "rule": [
+      {
+        "action": {"type": "Delete"},
+        "condition": {"age": 365, "matchesPrefix": ["reports/"]}
+      }
+    ]
+  }
+}
+JSON
+gcloud storage buckets update "gs://${GCS_BUCKET_NAME}" \
+  --lifecycle-file="$LIFECYCLE_JSON" >/dev/null
+rm -f "$LIFECYCLE_JSON"
+echo "    GCS lifecycle: reports/ deleted after 365 days"
+
 # ---- 3. Artifact Registry ----
 echo "==> Artifact Registry repo"
 if gcloud artifacts repositories describe "$AR_REPO" --location="$REGION" >/dev/null 2>&1; then

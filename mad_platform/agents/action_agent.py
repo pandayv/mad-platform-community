@@ -22,11 +22,17 @@ from __future__ import annotations
 import hashlib
 
 from mad_platform.agents.reporter import RankedFinding
-from mad_platform.severity import ESCALATE_ALWAYS, normalize
+from mad_platform.severity import ESCALATE_ALWAYS, LOW_CONFIDENCE_THRESHOLD, normalize
 from mad_platform.state import firestore_client as fs
 from mad_platform.tools.issue_sink import IssueSink
 
-LOW_CONFIDENCE_THRESHOLD = 0.6
+# Re-exported from mad_platform.severity, where it now lives alongside
+# ESCALATE_ALWAYS -- the two halves of this module's one escalation gate.
+# It moved because editor.py needs it and cannot import this module
+# (action_agent -> reporter -> editor is already a chain). Kept importable
+# from here because this is where the gate is, and because every existing
+# caller and test refers to it by this name.
+__all__ = ["LOW_CONFIDENCE_THRESHOLD", "idempotency_key", "needs_escalation", "route_and_file", "resolve_escalation"]
 
 
 def idempotency_key(job_id: str, page_url: str, finding: RankedFinding) -> str:
@@ -167,16 +173,40 @@ def resolve_escalation(sink: IssueSink, escalation_id: str, disposition: str, re
     if existing_ticket:
         return existing_ticket
 
-    title = f"[{data['severity'].upper()}] WCAG {data['wcag_criterion']} — {data['page_url']}"
-    description = (
-        f"WCAG citation: {data['wcag_criterion']}\n"
-        f"Severity: {data['severity']} (risk score {data['risk_score']:.0f}/100)\n"
-        f"Page: {data['page_url']}\n\n"
-        f"Evidence: {data['editor_rationale']}\n\n"
-        f"Why it matters: {data['risk_rationale']}\n\n"
-        f"Suggested fix: {data['suggested_fix']}\n\n"
-        f"[Confirmed by SME review: {reviewer}]"
-    )
-    ticket_id = sink.create_issue(title, description)
+    finding = _finding_from_escalation(data)
+    description = f"{_ticket_description(finding)}\n\n[Confirmed by SME review: {reviewer}]"
+    ticket_id = sink.create_issue(_ticket_title(finding), description)
     fs.record_ticket_for_finding(escalation_id, ticket_id)
     return ticket_id
+
+
+def _finding_from_escalation(data: dict) -> RankedFinding:
+    """Rebuilds the RankedFinding an escalation document was created from,
+    so the SME-confirmed path can call `_ticket_title`/`_ticket_description`
+    instead of re-implementing them.
+
+    It re-implemented them inline, right here, and this is the drift shape
+    this codebase has already been burned by (severity.py's docstring
+    records five copies of four words). A field added to the ticket body
+    would have been added to one of the two, and the SME-confirmed path
+    would have quietly produced a different ticket format than the
+    autonomous one -- for the same finding.
+
+    `.get()` with defaults rather than `data['severity']` etc., which is
+    what the inline copy did: an escalation document written by an older
+    revision, or one missing a field for any other reason, raised KeyError
+    -> 500 on an authenticated admin route instead of filing a ticket that
+    says what is missing. `normalize` with an explicit default for the same
+    reason -- a value read back out of Firestore has not been through the
+    response schema that constrains it on the way in.
+    """
+    return RankedFinding(
+        page_url=str(data.get("page_url", "(unknown page)")),
+        wcag_criterion=str(data.get("wcag_criterion", "(unknown criterion)")),
+        editor_rationale=str(data.get("editor_rationale", "")),
+        editor_confidence=float(data.get("editor_confidence", 0.0)),
+        risk_score=float(data.get("risk_score", 0.0)),
+        severity=normalize(data.get("severity", ""), default="medium"),
+        suggested_fix=str(data.get("suggested_fix", "")),
+        risk_rationale=str(data.get("risk_rationale", "")),
+    )

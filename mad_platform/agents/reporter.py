@@ -18,6 +18,7 @@ call worth spending that on, unlike the high-volume per-page checks.
 from __future__ import annotations
 
 import html as html_lib
+import logging
 import math
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -26,11 +27,20 @@ from pydantic import BaseModel
 
 from mad_platform import config
 from mad_platform.agents.editor import VerifiedFinding
-from mad_platform.agents.llm_validation import validate_indexed
-from mad_platform.severity import SEVERITY_ORDER, Severity, count_by_severity, normalize
+from mad_platform.agents.llm_validation import unanswered_indices, validate_indexed
+from mad_platform.severity import (
+    LOW_CONFIDENCE_THRESHOLD,
+    SEVERITY_ORDER,
+    Severity,
+    count_by_severity,
+    normalize,
+)
+from mad_platform.tools import untrusted
 from mad_platform.tools.adk_client import generate_structured
 from mad_platform.tools.gemini_client import FLASH, FLASH_LITE
 from mad_platform.web import theme
+
+logger = logging.getLogger("mad_platform.reporter")
 
 # The report can be opened outside the app's own origin (downloaded, saved
 # locally, reopened later) so the live-status check below needs an
@@ -152,7 +162,8 @@ class _RecommendationResponse(BaseModel):
     recommendations: list[_Recommendation]
 
 
-_REPORTER_PROMPT = """You are the Reporter for an accessibility scan. Editor
+_REPORTER_PROMPT = """{untrusted_preamble}
+You are the Reporter for an accessibility scan. Editor
 has confirmed the findings below as real violations. For each one, assess
 its real-world risk -- not just technical severity -- and recommend a
 concrete fix.
@@ -185,10 +196,21 @@ Confirmed findings (index: page, WCAG citation, Editor's rationale, confidence):
 
 
 def _format_findings(findings: list[tuple[str, VerifiedFinding]]) -> str:
+    """Reporter's prompt is second only to Editor's as an injection target:
+    it assigns `severity`, which drives `needs_escalation` -- the gate that
+    decides whether a human ever looks at a finding.
+
+    `rationale` is Editor's prose *about* the page, and Editor was asked to
+    ground it in the page's own evidence, so it routinely quotes attacker-
+    authored text verbatim. `page_url` is the submitted URL, which is also
+    a stranger's string (path and query included). Both are delimited; the
+    index, the WCAG number and the confidence float are ours.
+    """
     lines = []
     for i, (page_url, f) in enumerate(findings):
         lines.append(
-            f"{i}: [{page_url}] WCAG {f.wcag_criterion} (confidence {f.confidence:.2f}) -- {f.rationale}"
+            f"{i}: [{untrusted.inline(page_url)}] WCAG {f.wcag_criterion} "
+            f"(confidence {f.confidence:.2f}) -- {untrusted.inline(f.rationale)}"
         )
     return "\n".join(lines)
 
@@ -204,7 +226,10 @@ async def rank_and_recommend(confirmed_by_page: dict[str, list[VerifiedFinding]]
     if not flat:
         return []
 
-    prompt = _REPORTER_PROMPT.format(findings_list=_format_findings(flat))
+    prompt = _REPORTER_PROMPT.format(
+        untrusted_preamble=untrusted.UNTRUSTED_PREAMBLE,
+        findings_list=_format_findings(flat),
+    )
     result = await generate_structured(FLASH, prompt, _RecommendationResponse)
 
     # Four subscripts of `flat` per recommendation below. Validate once
@@ -215,7 +240,8 @@ async def rank_and_recommend(confirmed_by_page: dict[str, list[VerifiedFinding]]
         result.recommendations, len(flat), label="Reporter recommendations"
     )
 
-    ranked = [
+    ranked = _unranked_placeholders(flat, recommendations)
+    ranked += [
         RankedFinding(
             page_url=flat[rec.finding_index][0],
             wcag_criterion=flat[rec.finding_index][1].wcag_criterion,
@@ -236,6 +262,65 @@ async def rank_and_recommend(confirmed_by_page: dict[str, list[VerifiedFinding]]
     return ranked
 
 
+# What an unranked finding is scored and tiered as. "medium" is the
+# non-inflating middle of the vocabulary, deliberately: this finding has no
+# model-assigned severity, so anything higher would distort compute_score
+# and the donut on the strength of a missing answer rather than a judgment.
+_UNRANKED_SEVERITY = "medium"
+_UNRANKED_RISK_SCORE = 50.0
+
+
+def _unranked_placeholders(
+    flat: list[tuple[str, VerifiedFinding]], recommendations: list[_Recommendation]
+) -> list[RankedFinding]:
+    """Keeps a confirmed finding in the report when Reporter's response did
+    not rank it.
+
+    Same failure and same fix as editor._default_for_unanswered -- see that
+    docstring. These are findings Editor already *confirmed*: telling the
+    user nothing was found there because the ranking call came back short
+    is the worst available output for this product, and it was silent apart
+    from a WARNING nobody reads.
+
+    editor_confidence is forced below severity.LOW_CONFIDENCE_THRESHOLD so
+    action_agent.needs_escalation routes it to the owner's review queue
+    rather than auto-filing a ticket whose risk nothing assessed. Editor's
+    real rationale is carried through unchanged; the missing half (the risk
+    judgment and the fix) is what the placeholder text says is missing.
+    """
+    missing = unanswered_indices(recommendations, len(flat))
+    if not missing:
+        return []
+    logger.warning(
+        "Reporter did not rank %d confirmed finding(s) %s -- routing each to human "
+        "review at low confidence rather than dropping it from the report",
+        len(missing), missing,
+    )
+    placeholders = []
+    for index in missing:
+        page_url, finding = flat[index]
+        placeholders.append(
+            RankedFinding(
+                page_url=page_url,
+                wcag_criterion=finding.wcag_criterion,
+                editor_rationale=finding.rationale,
+                editor_confidence=min(finding.confidence, LOW_CONFIDENCE_THRESHOLD - 0.01),
+                risk_score=_UNRANKED_RISK_SCORE,
+                severity=_UNRANKED_SEVERITY,
+                suggested_fix=(
+                    "No fix was generated for this finding -- the ranking pass did not "
+                    "return a recommendation for it. It is kept here, and sent for human "
+                    "review, rather than dropped from the report."
+                ),
+                risk_rationale=(
+                    "This issue was confirmed but not risk-assessed, so its severity here "
+                    "is a placeholder rather than a judgment. A person will review it."
+                ),
+            )
+        )
+    return placeholders
+
+
 # ---------------------------------------------------------------------------
 # Step 3: the report artifact itself -- one fixed template, per section 5.5.
 # ---------------------------------------------------------------------------
@@ -244,7 +329,8 @@ class _ExecutiveSummary(BaseModel):
     summary: str  # 2-3 plain-English sentences, for a non-technical reader
 
 
-_EXEC_SUMMARY_PROMPT = """Write a 2-3 sentence executive summary of this
+_EXEC_SUMMARY_PROMPT = """{untrusted_preamble}
+Write a 2-3 sentence executive summary of this
 accessibility scan for a non-technical small business owner. Plain
 English, no jargon, no WCAG citation numbers. Mention the overall risk
 level and the single most important thing to act on first.
@@ -262,8 +348,19 @@ async def generate_executive_summary(url: str, ranked: list[RankedFinding]) -> s
             "pages checked. That's a good sign, not a guarantee -- only a subset "
             "of WCAG criteria and pages were covered."
         )
-    lines = "\n".join(f"- [{r.severity.upper()}] {r.wcag_criterion}: {r.editor_rationale[:100]}" for r in ranked)
-    prompt = _EXEC_SUMMARY_PROMPT.format(url=url, summary_lines=lines)
+    # Same reasoning as _format_findings above: the rationale is Editor's
+    # prose about a stranger's page and routinely quotes it, and the URL is
+    # the stranger's own string. Truncating to 100 characters is a length
+    # budget, not containment -- an instruction fits in far less than that.
+    lines = "\n".join(
+        f"- [{r.severity.upper()}] {r.wcag_criterion}: {untrusted.inline(r.editor_rationale[:100])}"
+        for r in ranked
+    )
+    prompt = _EXEC_SUMMARY_PROMPT.format(
+        untrusted_preamble=untrusted.UNTRUSTED_PREAMBLE,
+        url=untrusted.inline(url),
+        summary_lines=lines,
+    )
     result = await generate_structured(FLASH_LITE, prompt, _ExecutiveSummary)
     return result.summary
 

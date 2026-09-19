@@ -35,7 +35,7 @@ def get_client() -> firestore.Client:
     Built lazily, on first use, rather than at import: a module-level
     client makes importing anything that touches this file require live
     GCP credentials, which is what made this codebase impossible to write
-    a test against (CODE_REVIEW_FINDINGS.md S2/T1). lru_cache gives the
+    a test against. lru_cache gives the
     module-global-singleton behavior the old code had, while leaving
     import itself side-effect-free and the accessor monkeypatchable.
 
@@ -106,6 +106,15 @@ _LIMIT_DEFAULTS = {
     "MAD_MAX_SCANS_PER_IP_PER_DAY": 5,
     "MAD_MAX_SCANS_PER_MONTH": 500,  # a scan-count proxy for the $ budget, see DECISIONS_LOG.md
     "MAD_MAX_FEEDBACK_PER_IP_PER_DAY": 10,
+    # Verification-code guesses one address may submit in a day, across
+    # every email it tries. MAX_CODE_ATTEMPTS below bounds guesses per
+    # *code*; this bounds them per *submitter*, so requesting a fresh code
+    # (which resets `attempts` to 0 by design) is not an unlimited supply
+    # of new guesses. Generous on purpose -- a real visitor needs at most a
+    # handful, and a shared NAT may carry several real visitors -- while
+    # still leaving an attacker 50 tries against a 1,000,000-code space
+    # instead of as many as they can issue requests for.
+    "MAD_MAX_CODE_ATTEMPTS_PER_IP_PER_DAY": 50,
 }
 
 
@@ -144,6 +153,10 @@ def max_feedback_per_ip_per_day() -> int:
     return _limit("MAD_MAX_FEEDBACK_PER_IP_PER_DAY")
 
 
+def max_code_attempts_per_ip_per_day() -> int:
+    return _limit("MAD_MAX_CODE_ATTEMPTS_PER_IP_PER_DAY")
+
+
 # How long a scan record (the job document: submitted URL, owner email,
 # every finding) stays before Firestore's TTL sweep removes it, and the
 # same for the escalation and feedback documents that hang off one.
@@ -155,7 +168,9 @@ def max_feedback_per_ip_per_day() -> int:
 # paragraph below the list of what a scan collects. Writing the field is
 # only half of it: a Firestore TTL policy on each of `scan_jobs`,
 # `escalations` and `feedback` keyed to `expires_at` has to exist in the
-# project for anything to actually be deleted (see CODE_REVIEW_FIXES.md).
+# project for anything to actually be deleted. README.md's deploy steps
+# create them; DECISIONS_LOG.md records why the retention window is what
+# it is.
 SCAN_RECORD_RETENTION_DAYS = 365
 
 
@@ -706,7 +721,7 @@ def check_and_reserve_feedback_quota(ip: str) -> tuple[bool, str]:
     """The feedback form's own, separate rate limit -- not the scan quota.
 
     Feedback is deliberately open (no review token, no proof you ever
-    scanned anything: CODE_REVIEW_FINDINGS.md F5 closed the token-gated
+    scanned anything: an earlier review pass closed the token-gated
     version's real bug, which was unbounded writes with a caller-controlled
     allow_testimonial flag, not the absence of a token as such). Openness
     still needs *some* ceiling on write volume, just a much more generous
@@ -958,20 +973,29 @@ def generate_email_code(email: str) -> str:
     return code
 
 
-def verify_email_code(email: str, code: str) -> bool:
-    """Checks a submitted code against the pending one for this email.
-    Wrong guesses increment the attempt counter; hitting MAX_CODE_ATTEMPTS
-    clears the code entirely (forces a fresh request rather than leaving
-    an exhausted-but-technically-still-correct code sitting there). A
-    correct guess clears it too -- single-use, same as the reference this
-    was adapted from.
+@firestore.transactional
+def _check_and_consume_code(transaction, doc_ref, code: str, now: datetime) -> bool:
+    """The read-check-write body of verify_email_code, inside a real
+    Firestore transaction.
+
+    The transaction is load-bearing, exactly as it is in
+    `_check_and_reserve` above, and for the same reason. This used to be a
+    plain read-modify-write: read `attempts`, compare, write `attempts + 1`.
+    Under concurrency that bounds *rounds*, not guesses -- N simultaneous
+    POSTs all read `attempts == 0`, all get a guess, and all write
+    `attempts == 1`, so MAX_CODE_ATTEMPTS against a 6-digit space could be
+    defeated by batching. scan-onboarding runs --allow-unauthenticated at
+    concurrency 20 across multiple instances, so generating that
+    concurrency is trivial. Inside the transaction, the value read is the
+    value incremented, and a conflicting commit retries with fresh reads.
+
+    Reads must precede writes (Firestore's rule, and the shape this wants
+    anyway). `now` is passed in rather than read here so a test can pin it.
     """
-    key = email.strip().lower()
-    doc_ref = _email_codes().document(key)
-    doc = doc_ref.get()
-    if not doc.exists:
+    snapshot = doc_ref.get(transaction=transaction)
+    if not snapshot.exists:
         return False
-    data = doc.to_dict()
+    data = snapshot.to_dict()
     attempts = data.get("attempts", 0)
     expires_at = data.get("code_expires_at")
     valid = (
@@ -979,18 +1003,80 @@ def verify_email_code(email: str, code: str) -> bool:
         and bool(code)
         and code == data.get("code")
         and expires_at is not None
-        and datetime.now(timezone.utc) < expires_at
+        and now < expires_at
     )
+    cleared = {
+        "code": firestore.DELETE_FIELD,
+        "code_expires_at": firestore.DELETE_FIELD,
+    }
     if not valid:
         new_attempts = attempts + 1
         if new_attempts >= MAX_CODE_ATTEMPTS:
-            doc_ref.update({"code": firestore.DELETE_FIELD, "code_expires_at": firestore.DELETE_FIELD, "attempts": new_attempts})
+            transaction.update(doc_ref, {**cleared, "attempts": new_attempts})
         else:
-            doc_ref.update({"attempts": new_attempts})
+            transaction.update(doc_ref, {"attempts": new_attempts})
         return False
 
-    doc_ref.update({"code": firestore.DELETE_FIELD, "code_expires_at": firestore.DELETE_FIELD, "attempts": 0})
+    transaction.update(doc_ref, {**cleared, "attempts": 0})
     return True
+
+
+def verify_email_code(email: str, code: str) -> bool:
+    """Checks a submitted code against the pending one for this email.
+    Wrong guesses increment the attempt counter; hitting MAX_CODE_ATTEMPTS
+    clears the code entirely (forces a fresh request rather than leaving
+    an exhausted-but-technically-still-correct code sitting there). A
+    correct guess clears it too -- single-use, same as the reference this
+    was adapted from.
+
+    See `_check_and_consume_code` for why the counter has to be
+    transactional, and `check_and_reserve_code_attempt_quota` for the
+    per-address ceiling that sits in front of this on the route.
+    """
+    key = email.strip().lower()
+    doc_ref = _email_codes().document(key)
+    return _check_and_consume_code(
+        get_client().transaction(), doc_ref, code, datetime.now(timezone.utc)
+    )
+
+
+@firestore.transactional
+def _reserve_code_attempt(transaction, ref, now: datetime, limit: int) -> bool:
+    doc = ref.get(transaction=transaction)
+    count = doc.to_dict().get("count", 0) if doc.exists else 0
+    if count >= limit:
+        return False
+    transaction.set(
+        ref,
+        {"count": count + 1, "updated_at": now, "expires_at": now + timedelta(days=2)},
+        merge=True,
+    )
+    return True
+
+
+def check_and_reserve_code_attempt_quota(ip: str) -> tuple[bool, str]:
+    """Daily ceiling on verification-code guesses from one address.
+
+    POST /scan/verify-code had no rate limit of any kind on it: no
+    honeypot/timing check, no quota, nothing but the per-code attempt
+    counter -- which a fresh code request resets to zero by design. So the
+    effective bound on guessing was "however many requests you can send",
+    and the email gate is what the privacy page, the FAQ and the scan
+    form's own footnote all present as *the* anti-abuse control.
+
+    Transactional, unlike `check_and_reserve_feedback_quota`, and
+    deliberately so: the trade that makes a racy counter acceptable there
+    (a couple of extra cheap writes) does not hold for a counter whose
+    entire purpose is to resist a concurrent burst.
+    """
+    now = datetime.now(timezone.utc)
+    ref = _usage().document(f"code_ip_{ip}_{now.strftime('%Y-%m-%d')}")
+    allowed = _reserve_code_attempt(
+        get_client().transaction(), ref, now, max_code_attempts_per_ip_per_day()
+    )
+    if allowed:
+        return True, ""
+    return False, "Too many verification attempts from this network today. Please try again tomorrow."
 
 
 def set_verified_device(token_hash: str, email: str) -> None:

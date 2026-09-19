@@ -7,10 +7,9 @@ violated in five separate files:
    modules that construct GCP clients each used to carry
    `os.environ.get("GOOGLE_CLOUD_PROJECT", <the original hackathon
    project's ID>)`, plus a bucket default pointing at that same project's
-   bucket. (The literal values are recorded in CODE_REVIEW_FINDINGS.md S1
-   and deliberately not repeated here -- tests/test_config.py asserts they
-   appear nowhere under mad_platform/, and that guard is only absolute if
-   it has no exceptions.) With the variable unset (a local run, a
+   bucket. (The literal values are deliberately not repeated here --
+   tests/test_config.py asserts they appear nowhere under mad_platform/,
+   and that guard is only absolute if it has no exceptions.) With the variable unset (a local run, a
    developer shell, a revision missing the env var, a fork of the public
    repo) the client constructed fine and quietly read and wrote another
    project's data. `CLAUDE.md` names that project as a hard boundary this
@@ -21,9 +20,8 @@ violated in five separate files:
 2. **Reading config must not happen at import time.** Every value is
    behind a *function*, not a module-level constant. A module-level read
    makes `import mad_platform.web.app` fail without a configured
-   environment, which is what made this codebase untestable (see
-   CODE_REVIEW_FINDINGS.md T1/S2) -- the import cost the same as a live
-   GCP deployment. Lazy reads keep import side-effect-free while still
+   environment, which is what made this codebase untestable -- the import
+   cost the same as a live GCP deployment. Lazy reads keep import side-effect-free while still
    failing loudly the first time a value is actually needed.
 
    Fail-at-startup for a misconfigured deployment (the property the old
@@ -89,6 +87,67 @@ def app_base_url() -> str:
     user to someone else's deployment, so this fails loudly instead.
     """
     return _require("MAD_APP_BASE_URL", "It is the base of every report/review link emailed to a user.")
+
+
+# The production hostname. One literal, here, rather than one per module
+# that happens to need a soft fallback.
+#
+# This is deliberately NOT a violation of rule 1 above: rule 1 is about
+# values that name a *cloud resource*, where a wrong default silently
+# reads and writes another project's data. This names the public website,
+# where a wrong value produces a wrong link and nothing worse -- and where
+# failing loudly would be wrong, because `canonical_origin()` below feeds
+# metadata that must still render on an unconfigured fork or in a test.
+DEFAULT_CANONICAL_ORIGIN = "https://mad-platform.org"
+
+
+def canonical_origin() -> str:
+    """The app's own public origin, with no trailing slash, defaulted
+    rather than required.
+
+    Distinct from `app_base_url()` above on purpose, and the distinction
+    is the point: `app_base_url()` fails loudly because it builds report
+    and review links emailed to real people, where the wrong host sends
+    someone to the wrong deployment. This one backs SEO metadata, a
+    canonical tag (which is *supposed* to name the one production hostname
+    regardless of which host served the request) and a Slack link -- all of
+    which should still render on a fork that has configured nothing.
+
+    It exists because `MAD_APP_BASE_URL` had grown three readers with three
+    behaviours: raise-if-unset here, default-plus-rstrip in `web/app.py`,
+    and default-without-rstrip in `agents/pattern_miner.py`. A deployment
+    that set the variable with a trailing slash therefore produced
+    "https://host.com//review/..." from the pattern miner and a correct URL
+    from the other two. The `rstrip("/")` is the whole reason this is a
+    function rather than three copies of `os.environ.get(...)`.
+    """
+    return (os.environ.get("MAD_APP_BASE_URL") or DEFAULT_CANONICAL_ORIGIN).rstrip("/")
+
+
+def email_from_address() -> str:
+    """The From header on outbound mail. Defaulted for the same reason as
+    canonical_origin(): a fork with nothing configured should still be able
+    to import and run.
+    """
+    return os.environ.get("MAD_EMAIL_FROM") or f"MAD Platform <scans@{DEFAULT_CANONICAL_ORIGIN.removeprefix('https://')}>"
+
+
+def turnstile_site_key() -> str | None:
+    """Cloudflare Turnstile's public key -- not a secret, and optional:
+    unset means the widget is simply not rendered. Behind a function for
+    the same reason everything else here is (see rule 2 in the module
+    docstring), which also removes the need for a test to monkeypatch a
+    module-level constant in web/app.py.
+    """
+    return os.environ.get("TURNSTILE_SITE_KEY") or None
+
+
+def turnstile_secret_key() -> str | None:
+    """The verification key. Unset means the gate is open -- deliberately
+    the opposite of `review_code()`'s fail-closed behaviour; see
+    web/app.py's comment for why the two differ.
+    """
+    return os.environ.get("TURNSTILE_SECRET_KEY") or None
 
 
 def scan_worker_url() -> str:

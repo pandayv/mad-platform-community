@@ -10,8 +10,11 @@ never reaches quota accounting or the queue at all.
 
 from __future__ import annotations
 
+import asyncio
 import re
 import socket
+
+from mad_platform.tools import url_safety
 
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
@@ -59,3 +62,20 @@ def email_looks_valid(email: str) -> tuple[bool, str]:
         return False, "That email domain doesn't seem to exist — please double-check it."
 
     return True, ""
+
+
+async def email_looks_valid_async(email: str) -> tuple[bool, str]:
+    """`email_looks_valid` off the event loop, on url_safety's shared DNS
+    pool rather than asyncio.to_thread's process-wide default executor.
+
+    The blocking getaddrinfo call above is the same shape as the one
+    url_safety.assert_safe_target makes, and shares its problem: cancelling
+    the caller's wait_for doesn't stop it, so an abandoned resolution runs
+    to completion in whatever executor it landed in. On the default
+    executor, a burst of submissions naming slow or blackholed domains
+    could saturate the pool every other asyncio.to_thread in the process
+    shares. Running it on url_safety's dedicated pool instead means that
+    failure mode is now bounded to DNS lookups, not the whole instance.
+    """
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(url_safety.dns_executor(), email_looks_valid, email)

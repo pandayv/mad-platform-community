@@ -1,7 +1,8 @@
 """The pure functions the review named: theme.wcag_principle /
 principle_counts, pattern_miner._normalize_criterion,
 orchestrator._normalize_path, issue_sink._defuse_formula,
-url_safety.assert_safe_target, and wcag_version._VERSION_LINK_RE.
+url_safety.assert_safe_target, and wcag_version.parse_wcag_versions /
+split_by_release_status.
 
 No mocking needed for any of them -- which is exactly the point: they were
 untestable only because importing their modules used to require live GCP.
@@ -15,7 +16,11 @@ from mad_platform.agents.orchestrator import _normalize_path
 from mad_platform.agents.pattern_miner import _normalize_criterion
 from mad_platform.tools.issue_sink import CsvIssueSink, _defuse_formula
 from mad_platform.tools.url_safety import UnsafeTargetError, assert_safe_target, is_safe_target
-from mad_platform.tools.wcag_version import _VERSION_LINK_RE, parse_wcag_versions
+from mad_platform.tools.wcag_version import (
+    KNOWN_RECOMMENDATIONS,
+    parse_wcag_versions,
+    split_by_release_status,
+)
 from mad_platform.web import theme
 
 # --- theme.wcag_principle / principle_counts -------------------------------
@@ -263,3 +268,82 @@ def test_regex_is_case_insensitive():
     """
     assert parse_wcag_versions("/TR/wcag22/") == ["2.2"]
     assert parse_wcag_versions("/TR/WcAg22/") == ["2.2"]
+
+
+# --- B6: a draft must not be able to nominate itself as the standard ------
+
+
+def test_a_draft_version_is_not_treated_as_the_current_standard():
+    """`max()` over every /TR/wcag link had no notion of Recommendation vs
+    draft, while the module's docstring claimed it parsed links to "the
+    current standard". W3C publishes Working Drafts under /TR/ at the same
+    "latest version" URL a Recommendation eventually gets, so the first
+    time this overview page links WCAG 3 draft material the check would
+    have re-embedded, written "3.0" as the stored knowledge-base version,
+    and fired the major-change alert -- leaving the pointer wrong and
+    making the real 2.2 -> 3.0 transition a no-op when it lands.
+    """
+    released, unrecognized = split_by_release_status(["2.0", "2.2", "3.0"])
+    assert released[-1] == "2.2"
+    assert unrecognized == ["3.0"]
+
+
+def test_an_unrecognized_version_is_reported_rather_than_silently_dropped():
+    """Ignoring the draft link would swap one invisible failure for
+    another. The scheduled check alerts a person on this.
+    """
+    _released, unrecognized = split_by_release_status(["2.2", "3.0", "4.0"])
+    assert unrecognized == ["3.0", "4.0"]
+
+
+def test_todays_real_page_shape_still_resolves_to_2_2():
+    """The live page (checked 2026-09-19) links WCAG 2.2, 2.1 and 2.0, and
+    reaches WCAG 3 through /WAI/standards-guidelines/wcag/wcag3-intro/,
+    which this pattern does not match. The fix must not disturb that.
+    """
+    page = (
+        '<a href="https://www.w3.org/TR/WCAG22/">WCAG 2.2 Standard</a>'
+        '<a href="https://www.w3.org/TR/WCAG21/">WCAG 2.1 Standard</a>'
+        '<a href="https://www.w3.org/TR/WCAG20/">WCAG 2.0</a>'
+        '<a href="/WAI/standards-guidelines/wcag/wcag3-intro/">WCAG 3 Draft</a>'
+        '<a href="https://www.w3.org/TR/2018/REC-WCAG21-20180605/">dated</a>'
+    )
+    released, unrecognized = split_by_release_status(parse_wcag_versions(page))
+    assert released[-1] == "2.2"
+    assert unrecognized == []
+
+
+def test_the_allowlist_holds_the_versions_w3c_has_actually_published():
+    assert KNOWN_RECOMMENDATIONS == ("2.0", "2.1", "2.2")
+
+
+def test_a_page_with_only_unrecognized_versions_raises_rather_than_guessing(monkeypatch):
+    """The safe direction. Nominating a draft as current is the failure
+    this whole split exists to prevent, so if nothing known is on the page
+    the scheduled tick fails loudly instead.
+    """
+    from mad_platform.tools import wcag_version
+
+    monkeypatch.setattr(wcag_version.retry, "with_retry", lambda fn, **_k: '<a href="/TR/wcag-3.0/">x</a>')
+    with pytest.raises(wcag_version.WCAGVersionFetchError) as exc:
+        wcag_version.read_wcag_versions()
+    assert "3.0" in str(exc.value)
+    assert "KNOWN_RECOMMENDATIONS" in str(exc.value)
+
+
+def test_a_reading_carries_both_the_current_version_and_the_drafts(monkeypatch):
+    from mad_platform.tools import wcag_version
+
+    page = '<a href="/TR/WCAG22/">a</a><a href="/TR/wcag-3.0/">b</a>'
+    monkeypatch.setattr(wcag_version.retry, "with_retry", lambda fn, **_k: page)
+    reading = wcag_version.read_wcag_versions()
+    assert reading.current == "2.2"
+    assert reading.unrecognized == ("3.0",)
+
+
+def test_fetch_current_wcag_version_still_returns_a_plain_string(monkeypatch):
+    """Its callers pass the result straight into fs.set_kb_version."""
+    from mad_platform.tools import wcag_version
+
+    monkeypatch.setattr(wcag_version.retry, "with_retry", lambda fn, **_k: '<a href="/TR/WCAG22/">a</a>')
+    assert wcag_version.fetch_current_wcag_version() == "2.2"

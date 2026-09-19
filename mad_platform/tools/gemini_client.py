@@ -13,11 +13,9 @@ than the more typical Flash-vs-Pro split.
 from __future__ import annotations
 
 from functools import lru_cache
-from typing import TypeVar
 
 from google import genai
 from google.genai import types
-from pydantic import BaseModel
 
 from mad_platform import config
 from mad_platform.tools import retry
@@ -46,33 +44,13 @@ def get_client() -> genai.Client:
     )
 
 
-T = TypeVar("T", bound=BaseModel)
-
-
-def client_for_key(api_key: str | None):
-    """Bring-your-own-Gemini-key support (see DECISIONS_LOG.md): when a
-    visitor supplies their own Gemini API key, route that request through
-    the plain Developer API surface instead of this project's own Vertex
-    AI billing, using PRO_MODEL below instead of the free tier's
-    Flash/Flash-lite. Same google-genai SDK either way, just a different
-    auth mode -- this is the one place that distinction lives.
-
-    Returns the shared Vertex-authenticated client when api_key is falsy
-    (the normal, free-tier path unaffected). The caller is responsible for
-    never persisting api_key anywhere (no Firestore, no logs) -- it should
-    live only in memory for the one request that supplied it.
-
-    Not yet wired into analyst.py/editor.py/reporter.py's call sites or
-    the /scan form -- this is the foundation, the per-agent threading is
-    still open, logged for follow-up rather than rushed into the core
-    pipeline right before its first real deployment.
-    """
-    if not api_key:
-        return get_client()
-    return genai.Client(api_key=api_key, http_options=types.HttpOptions(timeout=_TIMEOUT_MS))
-
-
-PRO_MODEL = "gemini-3.7-pro"  # only reachable via a user-supplied key, see client_for_key() above
+# client_for_key() and PRO_MODEL used to sit here: the foundation for
+# bring-your-own-Gemini-key, never wired into analyst/editor/reporter or
+# the /scan form, as the comment on them said outright. An unused,
+# untested key-handling path that accepts a visitor-supplied credential is
+# a security-adjacent surface sitting in four deployed container images
+# for no benefit. The design is recorded in DECISIONS_LOG.md, which is
+# where an intention belongs until there is code that uses it.
 
 
 def _with_retry(call, label: str = "gemini"):
@@ -91,33 +69,18 @@ def _with_retry(call, label: str = "gemini"):
     return retry.with_retry(call, attempts=_MAX_ATTEMPTS, label=label)
 
 
-def generate_structured(
-    model: str,
-    prompt: str,
-    schema: type[T],
-    image_bytes: bytes | None = None,
-) -> T:
-    """One structured-output Gemini call. Raises on malformed responses
-    rather than returning something a caller might silently misuse --
-    every LLM call in this pipeline is schema-validated, not free text.
-    """
-    parts: list = []
-    if image_bytes:
-        parts.append(types.Part.from_bytes(data=image_bytes, mime_type="image/png"))
-    parts.append(prompt)
-
-    def _call():
-        response = get_client().models.generate_content(
-            model=model,
-            contents=parts,
-            config=types.GenerateContentConfig(
-                response_mime_type="application/json",
-                response_schema=schema,
-            ),
-        )
-        return schema.model_validate_json(response.text)
-
-    return _with_retry(_call, label=f"generate_structured({model})")
+# generate_structured() used to sit here too, and it is the deletion that
+# matters most: a second function with the same name and signature as the
+# live one in tools/adk_client.py, differing only in retry label and
+# transport, with no callers at all -- every caller imports the ADK one.
+# An autocomplete away from being imported by mistake, at which point a
+# judgment call would silently stop going through the agent Runner the
+# rest of the pipeline uses.
+#
+# What remains in this module is what is genuinely used: get_client, embed,
+# embed_batch and the model-name constants. Embeddings stay on the raw SDK
+# deliberately -- ADK has no embedding-agent primitive, because computing a
+# vector is not a judgment call (see adk_client's docstring).
 
 
 def embed(text: str) -> list[float]:

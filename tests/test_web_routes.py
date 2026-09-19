@@ -20,6 +20,13 @@ from mad_platform.state import firestore_client as fs
 from mad_platform.web import app as app_module
 
 
+# A real-shaped job id. Job ids are uuid.uuid4() strings
+# (firestore_client.create_job), and the routes that take one now validate
+# the shape before looking it up -- so "job-1" is not merely cosmetic here,
+# it is a 404 (see app._valid_job_id and tests/test_route_validation.py).
+JOB_ID = "3f1c2b8a-7d44-4e9b-9c10-2a5e6f0b1d77"
+
+
 @pytest.fixture
 def client() -> TestClient:
     return TestClient(app_module.app)
@@ -46,6 +53,30 @@ def test_the_stylesheet_is_cacheable_while_pages_stay_no_store(client):
 
     page = client.get("/")
     assert page.headers["cache-control"] == "no-store"
+
+
+def test_static_assets_carry_an_explicit_cache_control(client):
+    """T4/F3: this test's name promised /static coverage and never checked
+    it, while the middleware exempted /static from no-store on the belief
+    that StaticFiles sets its own long-lived header. It does not -- it
+    emits ETag and Last-Modified only -- so ~1.7 MB of PNGs were served
+    with no directive at all, leaving every browser to guess.
+    """
+    resp = client.get("/static/favicon.svg")
+    assert resp.status_code == 200
+    cache = resp.headers["cache-control"]
+    assert "no-store" not in cache
+    assert "max-age=" in cache
+    assert "public" in cache
+
+
+def test_static_assets_are_not_cached_forever(client):
+    """Unlike the theme stylesheet, /static filenames are not content-
+    hashed, so a replaced image has to be able to reach visitors.
+    `immutable` here would strand it.
+    """
+    cache = client.get("/static/favicon.svg").headers["cache-control"]
+    assert "immutable" not in cache
 
 
 def test_the_url_changes_when_the_css_changes():
@@ -97,6 +128,28 @@ def test_the_comparison_table_can_be_reached_and_named_by_keyboard(client):
     assert "aria-label=" in wrapper
 
 
+def test_no_comparison_cell_announces_something_other_than_its_mark(client):
+    """F8 / WCAG 1.3.1: the accessible name must convey the same
+    information as the visual presentation. Three cells did not -- a plain
+    cross announced as "Rarely", and two plain checks announced as "Yes,
+    automatic" -- so a screen-reader user heard a materially different
+    claim than a sighted one read. Notable beyond its severity because
+    this table is the product's own accessibility credential.
+    """
+    import re
+
+    body = client.get("/").text
+    table = body.split('class="compare-wrap"', 1)[1].split("</table>", 1)[0]
+    allowed = {"&check;": {"yes"}, "&cross;": {"no"}}
+    for cell in re.findall(r"<td[^>]*>(.*?)</td>", table, re.DOTALL):
+        mark = re.search(r'class="mark-(?:yes|no)"[^>]*>(&\w+;)</span>', cell)
+        if not mark:
+            continue  # .mark-partial cells: the visible text IS the name
+        announced = re.search(r'class="sr-only">(.*?)</span>', cell)
+        assert announced, cell
+        assert announced.group(1).strip().lower() in allowed[mark.group(1)], cell
+
+
 def test_the_scroll_hint_is_not_pointer_only(client):
     body = client.get("/").text
     hint = body.split('class="compare-hint"', 1)[1].split("</p>", 1)[0]
@@ -116,7 +169,7 @@ def test_the_illustrative_hero_report_is_hidden_from_assistive_tech(client):
 
 def test_the_status_page_announces_its_own_updates(client, monkeypatch):
     monkeypatch.setattr(fs, "get_job", lambda _j: {"url": "https://example.com/"})
-    body = client.get("/status/job-1").text
+    body = client.get(f"/status/{JOB_ID}").text
     content = body.split('id="content"', 1)[1].split(">", 1)[0]
     assert 'role="status"' in content
     assert 'aria-live="polite"' in content
@@ -128,7 +181,7 @@ def test_the_status_page_has_no_unreplaced_placeholders(client, monkeypatch):
     the brand mark).
     """
     monkeypatch.setattr(fs, "get_job", lambda _j: {"url": "https://example.com/"})
-    body = client.get("/status/job-1").text
+    body = client.get(f"/status/{JOB_ID}").text
     assert "__" not in body.replace("__pycache__", "")
 
 
@@ -142,7 +195,7 @@ async def test_turnstile_fails_open_when_cloudflare_returns_html(monkeypatch, ca
     exception and a 500 on POST /scan/start for every visitor: the exact
     opposite of the fail-open the comment promises.
     """
-    monkeypatch.setattr(app_module, "_TURNSTILE_SECRET_KEY", "secret")
+    monkeypatch.setenv("TURNSTILE_SECRET_KEY", "secret")
 
     class _FakeClient:
         async def __aenter__(self):
@@ -162,7 +215,7 @@ async def test_turnstile_fails_open_when_cloudflare_returns_html(monkeypatch, ca
 
 
 async def test_turnstile_fails_open_on_a_non_2xx_response(monkeypatch):
-    monkeypatch.setattr(app_module, "_TURNSTILE_SECRET_KEY", "secret")
+    monkeypatch.setenv("TURNSTILE_SECRET_KEY", "secret")
 
     class _FakeClient:
         async def __aenter__(self):
@@ -179,7 +232,7 @@ async def test_turnstile_fails_open_on_a_non_2xx_response(monkeypatch):
 
 
 async def test_turnstile_still_rejects_a_genuine_failure(monkeypatch):
-    monkeypatch.setattr(app_module, "_TURNSTILE_SECRET_KEY", "secret")
+    monkeypatch.setenv("TURNSTILE_SECRET_KEY", "secret")
 
     class _FakeClient:
         async def __aenter__(self):
@@ -205,7 +258,7 @@ def start_scan_harness(monkeypatch):
         fs, "check_and_reserve_scan_quota",
         lambda email, ip: (state.__setitem__("reserved", state["reserved"] + 1), (True, ""))[1],
     )
-    monkeypatch.setattr(fs, "create_job", lambda *a, **k: "job-xyz")
+    monkeypatch.setattr(fs, "create_job", lambda *a, **k: JOB_ID)
     monkeypatch.setattr(fs, "fail_job", lambda job_id, msg: state["failed"].append((job_id, msg)))
     monkeypatch.setattr(fs, "refund_scan_quota", lambda email, ip: state["refunded"].append((email, ip)))
     return state
@@ -213,7 +266,11 @@ def start_scan_harness(monkeypatch):
 
 async def _start(email="a@b.com", url="https://example.com/"):
     class _Req:
+        # Both are needed: the per-IP quota key comes from
+        # app._client_ip, which reads X-Forwarded-For first and only falls
+        # back to the socket peer. See test_client_ip.py.
         client = type("C", (), {"host": "1.2.3.4"})()
+        headers: dict[str, str] = {}
 
     return await app_module._start_scan(_Req(), url, email)
 
@@ -231,7 +288,7 @@ async def test_a_failed_enqueue_refunds_the_quota_and_fails_the_job(monkeypatch,
     resp = await _start()
     assert resp.status_code == 503
     assert start_scan_harness["refunded"] == [("a@b.com", "1.2.3.4")]
-    assert start_scan_harness["failed"] and start_scan_harness["failed"][0][0] == "job-xyz"
+    assert start_scan_harness["failed"] and start_scan_harness["failed"][0][0] == JOB_ID
     assert b"hasn&#x27;t been used" in resp.body or b"hasn't been used" in resp.body
 
 
@@ -246,7 +303,7 @@ async def test_an_already_queued_task_is_treated_as_success(monkeypatch, start_s
 
     resp = await _start()
     assert resp.status_code == 303
-    assert resp.headers["location"] == "/status/job-xyz"
+    assert resp.headers["location"] == f"/status/{JOB_ID}"
     assert start_scan_harness["refunded"] == []
 
 
@@ -278,7 +335,7 @@ def _post(client, **fields):
 
 
 def test_a_real_looking_submission_is_accepted(client, feedback_harness):
-    resp = _post(client, job_id="job-1")
+    resp = _post(client, job_id=JOB_ID)
     assert resp.status_code == 303
     assert resp.headers["location"] == "/feedback/thanks"
     assert len(feedback_harness) == 1
@@ -288,7 +345,7 @@ def test_the_submitted_url_is_stored_independent_of_job_id(client, feedback_harn
     """The URL field is editable, not just a display of the linked job's
     own URL -- what the visitor actually typed is what gets stored.
     """
-    _post(client, job_id="job-1", url="https://a-different-site.example")
+    _post(client, job_id=JOB_ID, url="https://a-different-site.example")
     (_args, kwargs) = feedback_harness[0]
     assert kwargs["url"] == "https://a-different-site.example"
 
@@ -354,7 +411,7 @@ def test_the_feedback_page_loads_with_no_job_context(client):
 
 def test_the_feedback_page_shows_the_scans_url_when_a_real_job_is_given(client, monkeypatch):
     monkeypatch.setattr(fs, "get_job", lambda _j: {"url": "https://example.com"})
-    resp = client.get("/feedback?job=job-1")
+    resp = client.get(f"/feedback?job={JOB_ID}")
     assert "example.com" in resp.text
 
 
@@ -363,5 +420,5 @@ def test_an_unknown_job_in_the_query_string_degrades_to_the_plain_form(client, m
     stops showing scan-specific context.
     """
     monkeypatch.setattr(fs, "get_job", lambda _j: None)
-    resp = client.get("/feedback?job=does-not-exist")
+    resp = client.get("/feedback?job=00000000-0000-4000-8000-000000000000")
     assert resp.status_code == 200

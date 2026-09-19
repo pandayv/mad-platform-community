@@ -85,6 +85,15 @@ THEME_CSS = """
      deliberate, argued-over number, which is exactly the kind of value
      that must not exist twice. */
   --scan-bar-max: 480px;
+  /* The one content width the header, the footer, the hero and every
+     section share. Same reasoning as --scan-bar-max directly above: it
+     existed as four separate 1080px literals, and the comment on
+     .hero-outer below had already drifted to cite 900px and 980px --
+     neither of which any of them has used for some time. A reader
+     aligning a new section from that comment would have reproduced an
+     alignment bug the code does not have. A token cannot drift from
+     itself. */
+  --content-max: 1080px;
   /* liquid-glass surface tokens: translucent panels over an ambient gradient,
      not flat opaque cards -- see body's background-image below for the field
      these surfaces actually refract. */
@@ -280,7 +289,7 @@ h2 { font-family: "Newsreader", Georgia, serif; font-weight: 600; font-size: 21p
   backdrop-filter: blur(20px) saturate(160%); -webkit-backdrop-filter: blur(20px) saturate(160%);
 }
 .site-header-inner {
-  max-width: 1080px; margin: 0 auto; padding: 18px 24px;
+  max-width: var(--content-max); margin: 0 auto; padding: 18px 24px;
   display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap;
 }
 .site-header-inner a.brand { text-decoration: none; }
@@ -323,7 +332,7 @@ h2 { font-family: "Newsreader", Georgia, serif; font-weight: 600; font-size: 21p
 }
 .site-footer { border-top: 1px solid var(--border); margin-top: 64px; }
 .site-footer-inner {
-  max-width: 1080px; margin: 0 auto; padding: 28px 24px 40px;
+  max-width: var(--content-max); margin: 0 auto; padding: 28px 24px 40px;
   display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap;
   font-size: 12.5px; color: var(--muted);
 }
@@ -340,11 +349,13 @@ h2 { font-family: "Newsreader", Georgia, serif; font-weight: 600; font-size: 21p
    spent on exactly one element -- not smeared across the whole page as
    background blobs. Went through ~10 rounds of mockup iteration before
    landing here; see the artifact history if this ever needs revisiting. ---- */
-/* 900px to match .site-header-inner exactly -- the mockup used 1160px,
-   which read fine in isolation but put the hero out of step with the
-   header logo above it (and with .section's 980px below), a real
-   misalignment once seen on the actual page next to the real header. */
-.hero-outer { max-width: 1080px; margin: 0 auto; padding: 20px 24px 0; box-sizing: border-box; }
+/* var(--content-max), to match .site-header-inner and .section exactly --
+   the mockup used 1160px, which read fine in isolation but put the hero
+   out of step with the header logo above it and the sections below, a
+   real misalignment once seen on the actual page next to the real header.
+   This comment used to cite 900px and 980px, and by then neither number
+   appeared anywhere in this file; the token is what keeps it honest. */
+.hero-outer { max-width: var(--content-max); margin: 0 auto; padding: 20px 24px 0; box-sizing: border-box; }
 .hero-grid { display: grid; grid-template-columns: 1.05fr 0.95fr; gap: 64px; align-items: stretch; }
 @media (max-width: 860px) { .hero-grid { grid-template-columns: 1fr; gap: 36px; } }
 
@@ -421,8 +432,14 @@ h2 { font-family: "Newsreader", Georgia, serif; font-weight: 600; font-size: 21p
    centered them relative to each other, their different heights read as
    a few pixels of misalignment. Matching them to the same explicit
    height removes that regardless of either element's own font metrics. */
-.scan-bar .scan-submit {
-  flex-shrink: 0; height: 44px; border-radius: 999px !important; padding: 0 22px !important; margin: 0;
+/* .btn.scan-submit, not .scan-submit: the base .btn rule is defined later
+   in this file and sets border-radius/padding/font-size too, so at equal
+   specificity source order would hand them to .btn. Two `!important`s used
+   to force this the other way; carrying the .btn class in the selector
+   wins on specificity instead, which leaves no !important for the next
+   override to have to out-shout. */
+.scan-bar .btn.scan-submit {
+  flex-shrink: 0; height: 44px; border-radius: 999px; padding: 0 22px; margin: 0;
   font-size: 14px;
   /* Matching the heights above removes the FONT-METRIC source of
      misalignment, but not all of it: the base .scan-submit rule sets
@@ -479,9 +496,11 @@ h2 { font-family: "Newsreader", Georgia, serif; font-weight: 600; font-size: 21p
   margin-bottom: 16px; cursor: pointer;
 }
 .feedback-checkbox input { width: 16px; height: 16px; flex-shrink: 0; accent-color: var(--brand); }
-.scan-submit {
+/* .btn.scan-submit for the same reason as .scan-bar .btn.scan-submit
+   above -- see that comment. */
+.btn.scan-submit {
   align-self: flex-end; justify-content: center; font-size: 14px;
-  border-radius: 10px !important; padding: 10px 20px !important; margin-top: 2px;
+  border-radius: 10px; padding: 10px 20px; margin-top: 2px;
 }
 @media (max-width: 480px) {
   .scan-bar { flex-wrap: wrap; border-radius: 22px; padding: 14px 16px; }
@@ -493,7 +512,7 @@ h2 { font-family: "Newsreader", Georgia, serif; font-weight: 600; font-size: 21p
   /* No align-self override needed any more -- .scan-bar .scan-submit sets
      center for every width now, instead of this rule undoing a leak from
      the base rule for phones only. */
-  .scan-bar .scan-submit { flex: 1; }
+  .scan-bar .btn.scan-submit { flex: 1; }
 }
 
 /* Same anti-abuse fact as the "how it works" footnote and the email-step
@@ -586,16 +605,25 @@ h2 { font-family: "Newsreader", Georgia, serif; font-weight: 600; font-size: 21p
    #fff a few lines up, on purpose (a floating callout that reads the same
    over the dark hero regardless of page theme, same as the rest of this
    block). var(--ink) flips to a near-white value in dark mode, which on
-   this always-white chip meant near-invisible text -- the one line in
-   this block that didn't match the "fixed, not theme-reactive" rule the
-   rest of it already follows. */
+   this always-white chip meant near-invisible text.
+
+   It was not the only line: the two icon colours below were var(--ok) and
+   var(--crit) on this same always-white chip, and in dark mode those
+   resolve to #57D79A (1.81:1 -- the green check on "Alt text found" was
+   effectively invisible to a dark-mode visitor) and #F2586A (3.29:1).
+   Same bug, same block, two lines down from the comment describing it as
+   fixed. Pinned to the light palette's values, which is what "fixed, not
+   theme-reactive" means for a permanently-white surface: 5.35:1 and
+   6.21:1. They are written as literals here rather than var() precisely
+   so they cannot follow the theme; theme.LIGHT_HEX holds the same values
+   for the mirror test, which is what keeps them from drifting. */
 .example-chip {
   position: absolute; background: #fff; border-radius: 11px; padding: 9px 13px; font-size: 12px; font-weight: 600;
   display: flex; align-items: center; gap: 7px; box-shadow: 0 16px 30px -14px rgba(0,0,0,0.45); z-index: 3; color: #14171F;
 }
 .example-chip svg { width: 14px; height: 14px; flex-shrink: 0; }
-.example-chip.ok svg { color: var(--ok); }
-.example-chip.warn svg { color: var(--crit); }
+.example-chip.ok svg { color: #157A4F; }
+.example-chip.warn svg { color: #C0152B; }
 .example-chip-1 { top: 24px; right: 22px; }
 .example-chip-2 { bottom: 38px; left: 18px; }
 
@@ -611,7 +639,7 @@ h2 { font-family: "Newsreader", Georgia, serif; font-weight: 600; font-size: 21p
 .lockup-caption { margin: 0; text-align: center; font-size: 15.5px; font-weight: 500; color: var(--ink-soft); line-height: 1.4; }
 .lockup-caption .hl { color: var(--brand-dark); font-weight: 800; }
 
-@media (max-width: 640px) { .scan-submit { align-self: stretch; } }
+@media (max-width: 640px) { .btn.scan-submit { align-self: stretch; } }
 
 /* One pattern, every section below the hero, modeled on the eyebrow +
    big-title + small-subtext composition (the epresence.ai-inspired
@@ -619,7 +647,7 @@ h2 { font-family: "Newsreader", Georgia, serif; font-weight: 600; font-size: 21p
    bold title -- the title is the section's real name, sized to actually
    dominate the eyebrow and the subtext both, not just nudged a step over
    plain body text. Applies identically to every section now, not just one. */
-.section { max-width: 1080px; margin: 0 auto; padding: 56px 24px; scroll-margin-top: 90px; }
+.section { max-width: var(--content-max); margin: 0 auto; padding: 56px 24px; scroll-margin-top: 90px; }
 .section-head { text-align: center; margin-bottom: 52px; }
 .section-eyebrow { display: flex; align-items: center; justify-content: center; gap: 12px; margin-bottom: 12px; }
 .section-eyebrow .line { width: 22px; height: 1px; background: var(--brand); opacity: 0.5; }
@@ -882,7 +910,29 @@ input[type=password] {
   width: 100%; padding: 12px 14px; font-size: 15px; border: 1px solid var(--border); background: var(--bg);
   color: var(--ink); border-radius: 8px; margin-bottom: 14px; font-family: inherit;
 }
-button, .btn {
+/* .btn, NOT the bare `button` element.
+   This rule paints the brand gradient, white text, a 12px radius, an inset
+   highlight, a drop shadow, position:relative + overflow:hidden, and a
+   ::before pseudo-element washing white over the top 42%. As a bare
+   element selector in a 1,119-line shared stylesheet it reached every
+   <button> on every surface -- scan form, verification step, feedback
+   form, review-queue login, escalation detail, the standalone stored
+   report -- whether or not that button wanted to look like this.
+   Two consumers did not, and neither reset the full set:
+     - .link-btn (the "Resend code" control, meant to look like a plain
+       underlined link) rendered with a drop shadow, an inset highlight, a
+       white gradient wash and a hover lift. Confirmed in a headless
+       browser, not inferred: its computed box-shadow and ::before
+       background were the ones above.
+     - .nav-toggle (the hamburger, on the mobile nav of every page)
+       carried the same wash across its top half.
+   .btn-secondary and .btn.ghost *did* carry a ::before reset, which is
+   the proof the reset was known to be needed and applied to two of the
+   four consumers -- patching each victim as it was noticed instead of
+   removing the leak. Opt-in scoping removes it for good: a new <button>
+   anywhere now inherits nothing, and asks for this look by class.
+   tests/test_theme_palette.py pins that this selector stays scoped. */
+.btn {
   position: relative; overflow: hidden;
   display: inline-flex; align-items: center; gap: 6px; color: #fff; border: none;
   background: linear-gradient(180deg, color-mix(in srgb, var(--brand) 100%, white 14%), var(--brand) 60%, var(--brand-dark));
@@ -890,11 +940,11 @@ button, .btn {
   font-family: inherit; box-shadow: 0 1px 0 rgba(255,255,255,0.35) inset, 0 6px 16px -6px rgba(9,30,28,0.45);
   transition: transform 0.15s ease, box-shadow 0.15s ease;
 }
-button::before, .btn::before {
+.btn::before {
   content: ""; position: absolute; inset: 0 0 58% 0; border-radius: inherit;
   background: linear-gradient(180deg, rgba(255,255,255,0.32), transparent); pointer-events: none;
 }
-button:hover, .btn:hover { transform: translateY(-1px); box-shadow: 0 1px 0 rgba(255,255,255,0.35) inset, 0 10px 22px -6px rgba(9,30,28,0.5); }
+.btn:hover { transform: translateY(-1px); box-shadow: 0 1px 0 rgba(255,255,255,0.35) inset, 0 10px 22px -6px rgba(9,30,28,0.5); }
 .btn-secondary, .btn.ghost {
   background: var(--glass); color: var(--brand-dark); border: 1.5px solid var(--brand); box-shadow: none;
   backdrop-filter: blur(12px) saturate(150%); -webkit-backdrop-filter: blur(12px) saturate(150%);
@@ -1012,6 +1062,29 @@ LIGHT_HEX = {
     "--brand": "#0B6E66",
     "--ink": "#12181A",
     "--muted": "#5B6B6A",
+}
+
+# The dark-mode value of each severity token, mirrored the same way and
+# under the same test.
+#
+# This is not "for dark mode" -- it is for the surfaces that are *always*
+# dark whatever the viewer's theme, which is a different thing and the
+# reason this dict has to exist separately. The hero's example report panel
+# is one of those: it is a fixed #12181A card, on purpose, so it reads the
+# same over the dark hero regardless of page theme (see the .example-chip
+# comment above). A theme-reactive var() resolved against a fixed
+# background is the bug that comment describes, and the severity dots
+# inside that panel were still doing it -- with the light palette against
+# the panel's #1E2425 rows they measured 2.11:1 (--low) and 2.54:1
+# (--crit), under the 3:1 WCAG minimum for a non-text UI component, in the
+# DEFAULT theme, in the hero of an accessibility product. These values
+# clear it comfortably (4.78:1 to 8.77:1 on that row).
+DARK_HEX = {
+    "--crit": "#F2586A",
+    "--high": "#F0954C",
+    "--med": "#E3BE3D",
+    "--low": "#9FB2C4",
+    "--ok": "#57D79A",
 }
 
 

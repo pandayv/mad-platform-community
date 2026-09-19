@@ -1,14 +1,14 @@
 """The severity vocabulary, defined once.
 
-Before this module the same four words existed as five independent lists
-(CODE_REVIEW_FINDINGS.md X2): `theme._SEVERITY_ORDER`,
+Before this module the same four words existed as five independent lists:
+`theme._SEVERITY_ORDER`,
 `reporter._SCORE_WEIGHT`, `reporter._EMAIL_SEVERITY_COLOR`, the counts
 dict rebuilt in `orchestrator.build_scan_summary`, and a `SEV_ORDER`
 array in the status page's JavaScript. Adding or renaming a tier meant
 finding all five, and the charts silently disagreed with the headline
 count whenever one was missed.
 
-It also had no *validation*, which is the bug underneath B13: `severity`
+It also had no *validation*, and that was the deeper bug: `severity`
 was a plain `str` filled in by Gemini, so an off-vocabulary value like
 "Critical" or "severe" produced a phantom key in the counts dict that the
 donut and legend ignored (ring total != headline total), took the silent
@@ -44,6 +44,20 @@ SEVERITY_ORDER: tuple[str, ...] = ("critical", "high", "medium", "low")
 # The one severity that forces human review regardless of the model's own
 # confidence (see action_agent.needs_escalation).
 ESCALATE_ALWAYS: str = "critical"
+
+# The other half of that same gate: an Editor confidence below this sends
+# a finding to human review whatever its severity.
+#
+# It lives here, next to ESCALATE_ALWAYS, rather than in action_agent where
+# it started, because it is now read by three modules on both sides of an
+# import cycle -- action_agent owns the gate, but editor and orchestrator
+# both need to construct a finding that is guaranteed to land on the review
+# side of it, and editor cannot import action_agent (action_agent imports
+# reporter, which imports editor). This module deliberately imports nothing
+# from the package, which is what makes it a safe home for shared policy
+# constants; the alternative was a second literal 0.6 somewhere, which is
+# the exact duplication this module's docstring exists to describe.
+LOW_CONFIDENCE_THRESHOLD: float = 0.6
 
 
 class UnknownSeverityError(ValueError):
@@ -85,7 +99,7 @@ def count_by_severity(values: list[str]) -> dict[str, int]:
     over-reporting severity is recoverable, under-reporting it is the
     failure mode that matters, and dropping the finding entirely would
     make the ring total disagree with the headline count -- the exact
-    symptom B13 describes.
+    symptom described above.
     """
     counts = empty_counts()
     for value in values:

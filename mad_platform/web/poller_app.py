@@ -10,19 +10,10 @@ import logging
 from fastapi import FastAPI
 
 from mad_platform.agents.wcag_auto_heal import run_wcag_freshness_check
+from mad_platform.logging_setup import configure_logging
 
-# Not logging.basicConfig(): uvicorn configures its own logging on startup,
-# after this module is imported, and silently drops INFO-level output from
-# our own loggers on a cold start if we rely on basicConfig() alone --
-# confirmed in production on scan-onboarding. Attaching a handler directly
-# to the "mad_platform" namespace, independent of the root logger uvicorn
-# manages, survives that.
-_handler = logging.StreamHandler()
-_handler.setFormatter(logging.Formatter("%(levelname)s:%(name)s:%(message)s"))
-_mad_logger = logging.getLogger("mad_platform")
-_mad_logger.setLevel(logging.INFO)
-_mad_logger.addHandler(_handler)
-_mad_logger.propagate = False
+# See mad_platform/logging_setup.py for why this is not basicConfig().
+configure_logging()
 
 logger = logging.getLogger("mad_platform.wcag_poller")
 

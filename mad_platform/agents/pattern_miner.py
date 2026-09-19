@@ -32,11 +32,11 @@ change does before the knowledge base auto-updates.
 from __future__ import annotations
 
 import hashlib
-import os
 from collections import defaultdict
 
 from pydantic import BaseModel
 
+from mad_platform import config
 from mad_platform.state import firestore_client as fs
 from mad_platform.tools import notify
 from mad_platform.tools.adk_client import generate_structured
@@ -50,7 +50,11 @@ CONFIDENCE_THRESHOLD = 0.75
 # reads of the same variable: this URL only ever reaches a Slack alert
 # (optional, currently unconfigured), never a link a real user depends on,
 # so it isn't worth crashing the whole weekly job over.
-_APP_BASE_URL = os.environ.get("MAD_APP_BASE_URL", "https://mad-platform.org")
+#
+# Through config.canonical_origin() rather than its own os.environ.get,
+# which is what it used to be: that copy had no rstrip("/"), so a
+# MAD_APP_BASE_URL set with a trailing slash produced
+# "https://host.com//review/<id>" here and a correct link everywhere else.
 
 
 class _PatternAssessment(BaseModel):
@@ -136,7 +140,7 @@ async def mine_patterns() -> list[dict]:
             [
                 f"WCAG {code} -- seen {len(findings)} time(s), confidence {assessment.confidence:.2f}",
                 assessment.pattern_description,
-                f"Review: {_APP_BASE_URL}/review/{key}",
+                f"Review: {config.canonical_origin()}/review/{key}",
             ],
         )
         created.append({"wcag_criterion": code, "occurrence_count": len(findings)})

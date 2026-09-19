@@ -149,7 +149,8 @@ class _RetryDecision(BaseModel):
     reasoning: str
 
 
-_RETRY_GATE_PROMPT = """You are the Orchestrator overseeing an accessibility
+_RETRY_GATE_PROMPT = """{untrusted_preamble}
+You are the Orchestrator overseeing an accessibility
 scan. Editor has just verified Analyst's findings for a page. Decide: is
 this analysis good enough to proceed, or does the page warrant one more,
 deeper look from Analyst?
@@ -170,17 +171,27 @@ Editor's verification results for this page:
 
 
 def _format_verification_summary(verified: list[VerifiedFinding]) -> str:
+    """The rationale is Editor's prose about a stranger's page and quotes
+    it verbatim by design, so it is delimited here for the same reason
+    reporter._format_findings delimits it -- see tools/untrusted.py.
+    """
     if not verified:
         return "(no findings at all -- Analyst flagged nothing on this page)"
     lines = []
     for v in verified:
         status = "CONFIRMED" if v.confirmed else "DISMISSED"
-        lines.append(f"- [{status}] WCAG {v.wcag_criterion}, confidence {v.confidence:.2f}: {v.rationale}")
+        lines.append(
+            f"- [{status}] WCAG {v.wcag_criterion}, confidence {v.confidence:.2f}: "
+            f"{untrusted.inline(v.rationale)}"
+        )
     return "\n".join(lines)
 
 
 async def evaluate_retry_gate(verified: list[VerifiedFinding]) -> _RetryDecision:
-    prompt = _RETRY_GATE_PROMPT.format(summary=_format_verification_summary(verified))
+    prompt = _RETRY_GATE_PROMPT.format(
+        untrusted_preamble=untrusted.UNTRUSTED_PREAMBLE,
+        summary=_format_verification_summary(verified),
+    )
     return await generate_structured(FLASH, prompt, _RetryDecision)
 
 
@@ -317,7 +328,8 @@ def build_scan_summary(
 
     This lives here, next to the code that produces the numbers, rather
     than in worker_app.py where it used to. That split was the cause of
-    B4: the orchestrator marked the job completed, then handed a result
+    The bug this shape exists to prevent: the orchestrator marked the job
+    completed, then handed a result
     object back to the worker, which computed this dict and wrote it
     afterwards -- so "completed" and "has a summary" were two writes from
     two services with several seconds of Slack/Gemini/Resend work in
@@ -377,7 +389,7 @@ async def run_one_time_scan(
             # not re-deciding its scope).
             #
             # Keyed off `selected_pages`, NOT off `pages` being non-empty,
-            # and the distinction is the whole of B11. `pages` is the
+            # and that distinction is the whole point here. `pages` is the
             # per-page checkpoint map, and the entry URL is checkpointed
             # into it one line BEFORE select_pages runs. So a first attempt
             # that died inside the selection call -- a Gemini call, which is
@@ -480,47 +492,74 @@ async def run_one_time_scan(
         fs.complete_job(job_id, summary)
         logger.info("[%s] Scan complete: %s", job_id, url)
 
-        app_base_url = config.app_base_url()
-        notify.summary(
-            f"Scan complete: {url}",
-            [
-                f"{len(ranked)} confirmed finding(s) across {len(pages)} page(s)",
-                f"Filed automatically: {len(filing['filed']) + len(filing['already_filed'])}",
-                f"Awaiting owner review: {len(filing['escalated'])}",
-                f"Report: {app_base_url}/report/{job_id}",
-            ],
-        )
+        # Post-completion notification, and it does not re-raise.
+        #
+        # This block used to be bare, so any failure in it propagated. The
+        # handler below correctly refused to downgrade the job -- the scan
+        # genuinely succeeded -- and then re-raised anyway, which
+        # worker_app.run_scan turns into a 500 and Cloud Tasks into a
+        # retry. That retry then hits worker_app's own
+        # `status == "completed" and summary` short-circuit and returns
+        # {"already_completed": true} without attempting the email again.
+        # So a transient failure here -- notify.summary, the Gemini call in
+        # draft_email_summary (60s timeout, two attempts), the attachment
+        # build -- permanently lost the report email while the queued-state
+        # status page had already promised "we'll email your full report to
+        # the address you submitted as soon as it's ready", and burned a
+        # second Cloud Tasks attempt that could never do anything.
+        #
+        # A 500 also misrepresents the outcome: the report is saved, the
+        # summary is written, the status page renders. If email delivery
+        # should be genuinely retryable it needs to be its own Cloud Task,
+        # not a tail on the scan task.
+        try:
+            app_base_url = config.app_base_url()
+            notify.summary(
+                f"Scan complete: {url}",
+                [
+                    f"{len(ranked)} confirmed finding(s) across {len(pages)} page(s)",
+                    f"Filed automatically: {len(filing['filed']) + len(filing['already_filed'])}",
+                    f"Awaiting owner review: {len(filing['escalated'])}",
+                    f"Report: {app_base_url}/report/{job_id}",
+                ],
+            )
 
-        recipient = job_record.get("owner_contact")
-        if recipient:
-            review_lines = [
-                f"WCAG {ranked[index].wcag_criterion} on {ranked[index].page_url}"
-                for index, _finding, _escalation_id in filing["escalated"]
-            ]
-            review_url = (
-                f"{app_base_url}/review/link/{job_id}/{review_token}" if review_lines and review_token else None
+            recipient = job_record.get("owner_contact")
+            if recipient:
+                review_lines = [
+                    f"WCAG {ranked[index].wcag_criterion} on {ranked[index].page_url}"
+                    for index, _finding, _escalation_id in filing["escalated"]
+                ]
+                review_url = (
+                    f"{app_base_url}/review/link/{job_id}/{review_token}" if review_lines and review_token else None
+                )
+                email_summary = draft_email_summary(
+                    url,
+                    ranked,
+                    score,
+                    counts,
+                    exec_summary,
+                    report_url=f"{app_base_url}/report/{job_id}",
+                    csv_url=f"{app_base_url}/report/{job_id}/tickets.csv",
+                    job_id=job_id,
+                )
+                # Reuses the CSV already exported into the summary above rather
+                # than calling sink.export() a second time -- one export, one
+                # set of rows, so the attachment and the download route can
+                # never disagree.
+                attachments = [("report.html", report.encode("utf-8"))]
+                if summary["csv_export"]:
+                    attachments.append(("tickets.csv", summary["csv_export"].encode("utf-8")))
+                notify.send_report_email(
+                    recipient, url, email_summary, review_lines=review_lines, review_url=review_url, attachments=attachments
+                )
+        except Exception:  # noqa: BLE001 - see the comment above: the scan succeeded
+            logger.exception(
+                "[%s] Scan completed and the report is saved, but post-completion "
+                "notification failed -- the visitor may not have received their email",
+                job_id,
             )
-            email_summary = draft_email_summary(
-                url,
-                ranked,
-                score,
-                counts,
-                exec_summary,
-                report_url=f"{app_base_url}/report/{job_id}",
-                csv_url=f"{app_base_url}/report/{job_id}/tickets.csv",
-                job_id=job_id,
-            )
-            # Reuses the CSV already exported into the summary above rather
-            # than calling sink.export() a second time -- one export, one
-            # set of rows, so the attachment and the download route can
-            # never disagree.
-            attachments = [("report.html", report.encode("utf-8"))]
-            if summary["csv_export"]:
-                attachments.append(("tickets.csv", summary["csv_export"].encode("utf-8")))
-            notify.send_report_email(
-                recipient, url, email_summary, review_lines=review_lines, review_url=review_url, attachments=attachments
-            )
-    except Exception as exc:  # noqa: BLE001
+    except Exception:  # noqa: BLE001
         if job_id is not None:  # only unset if fs.create_job itself is what failed
             # Never downgrade an already-completed job. Everything after
             # complete_job() is post-completion notification (Slack, the
@@ -535,7 +574,23 @@ async def run_one_time_scan(
             if (fs.get_job(job_id) or {}).get("status") == "completed":
                 logger.exception("[%s] Scan completed, but post-completion notification failed", job_id)
             else:
-                fs.fail_job(job_id, str(exc))
+                # An operator-facing message, not str(exc). The `error`
+                # field is returned verbatim by GET /api/status/{job_id}
+                # and rendered on the public, unauthenticated status page
+                # by renderFailed. It is correctly HTML-escaped there, so
+                # this is not XSS -- it is information disclosure: the
+                # exception may be a MissingConfigError naming an env var,
+                # a google.api_core error naming the GCP project and a
+                # resource path, or a FetchError carrying the full internal
+                # Playwright message. The enqueue path in app._start_scan
+                # already does exactly this. The real text is not lost --
+                # logger.exception below emits it with the traceback.
+                logger.exception("[%s] Scan failed", job_id)
+                fs.fail_job(
+                    job_id,
+                    "Something went wrong while scanning this site. This is on our "
+                    "side, not yours -- please try again in a few minutes.",
+                )
         raise
 
     return ScanResult(

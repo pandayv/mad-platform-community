@@ -1,0 +1,74 @@
+# T2: the test suite runs automatically, not only when someone remembers.
+#
+# 441 tests that need no GCP, no emulator and no network are worth little
+# if nothing runs them. It matters most next to .github/dependabot.yml,
+# which opens grouped weekly dependency PRs across all 72 pins: without a
+# check on them, those PRs arrive with nothing to look at and the natural
+# thing to do is merge on faith.
+#
+# Python 3.13 because that is what all four containers run (the shared
+# digest-pinned python:3.13-slim base). CI should fail on what production
+# would fail on, not on whatever a developer happens to have locally.
+
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  # A new push supersedes an in-flight run on the same ref.
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt -r requirements-dev.txt
+
+      - name: Run the test suite
+        # No credentials are configured for this job on purpose. The suite
+        # is designed to need none (see tests/conftest.py), so if a test
+        # ever starts reaching for real GCP, this is where it should fail.
+        run: python -m pytest
+
+  audit:
+    # Separate job, not a second step, so a dependency advisory and a test
+    # failure are never mistaken for each other on the checks list.
+    # requirements-dev.txt already documents pip-audit as the intended
+    # pre-deploy check; this is the same command, run on every push.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+
+      - name: Install pip-audit
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+
+      - name: Audit pinned runtime dependencies
+        run: pip-audit -r requirements.txt

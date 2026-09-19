@@ -13,7 +13,7 @@ import logging
 
 from pydantic import BaseModel
 
-from mad_platform.agents.llm_validation import validate_indexed
+from mad_platform.agents.llm_validation import unanswered_indices, validate_indexed
 
 
 class _Item(BaseModel):
@@ -82,3 +82,34 @@ def test_exact_match_logs_nothing(caplog):
     with caplog.at_level(logging.WARNING, logger="mad_platform.llm_validation"):
         validate_indexed(_items(0, 1, 2), 3, label="t")
     assert caplog.records == []
+
+
+# --- B5: a log line was not enough; the caller has to be able to act ------
+
+
+def test_unanswered_indices_reports_the_gap():
+    """The first fix for a short response was a WARNING. The finding still
+    vanished -- from the report, the CSV and the score -- and nobody reads
+    Cloud Run WARNING logs on a free tool. This is what lets the caller
+    give each one a deliberate disposition instead.
+    """
+    kept = validate_indexed(_items(0, 2), 4, label="t")
+    assert unanswered_indices(kept, 4) == [1, 3]
+
+
+def test_an_item_dropped_for_being_out_of_range_counts_as_unanswered():
+    """It has to: the source item still has no answer, whatever the reason
+    the model's item was discarded.
+    """
+    kept = validate_indexed(_items(0, 99), 2, label="t")
+    assert unanswered_indices(kept, 2) == [1]
+
+
+def test_an_item_dropped_as_a_duplicate_counts_as_unanswered_too():
+    kept = validate_indexed(_items(0, 0), 2, label="t")
+    assert unanswered_indices(kept, 2) == [1]
+
+
+def test_a_complete_response_has_no_unanswered_indices():
+    kept = validate_indexed(_items(0, 1, 2), 3, label="t")
+    assert unanswered_indices(kept, 3) == []
