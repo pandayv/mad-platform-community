@@ -31,8 +31,8 @@ PENDING_TASKS.md
 _pre_rewrite_backup_20260904/
 DECISIONS_LOG.md
 CLAUDE.md
-CODE_REVIEW_FINDINGS.md
-CODE_REVIEW_FIXES.md
+CODE_REVIEW_FINDINGS*.md
+CODE_REVIEW_FIXES*.md
 
 # Claude Code local session state
 .claude/

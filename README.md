@@ -254,6 +254,33 @@ instead of silently pointing at the wrong project. That module is the
 source of truth for exact variable names if this guide ever drifts from
 the code again.
 
+### The fast path: one script
+
+[Use this template](https://github.com/new?template_name=mad-platform-community&template_owner=pandayv)
+to get your own copy of this repo (GitHub keeps a permanent "generated
+from pandayv/mad-platform-community" link on it), then clone your copy
+and run:
+
+```bash
+git clone https://github.com/YOUR_USERNAME/YOUR_REPO.git
+cd YOUR_REPO
+python3 -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
+export PROJECT_ID=YOUR_PROJECT_ID
+./setup.sh
+```
+
+`setup.sh` runs every gcloud command in steps 2 through 10 below, in
+order, idempotently (safe to re-run after a partial failure — it checks
+whether each resource exists before creating it). It ends with a working
+public instance at your own Cloud Run URL. The step-by-step walkthrough
+below is for understanding what it's doing, customizing a step, or
+running things by hand instead.
+
+The numbered steps below are what `setup.sh` automates — read them if you
+want to understand what it's doing, customize a step, or run things by
+hand instead.
+
 ### 1. Clone and set up the local environment
 
 ```bash
@@ -589,6 +616,7 @@ mad_platform/
 docs/            # Self-hosted architecture diagram (GitHub Pages)
 tests/           # pytest suite -- pure logic, LLM-boundary validation,
                   # and routes that don't need live GCP (see above)
+setup.sh                       # One-command deploy -- automates the numbered steps above
 run_scan.py                    # CLI entry point for a one-time scan
 review_escalations.py          # SME review queue CLI (web UI is the primary surface)
 check_wcag_version.py          # Manual trigger for the WCAG freshness check
