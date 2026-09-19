@@ -384,7 +384,7 @@ h2 { font-family: "Newsreader", Georgia, serif; font-weight: 600; font-size: 21p
    saturated, so it actually reads as a distinct accent against the
    headline's own color, not just a font-weight difference. */
 .hero-title strong { font-weight: 800; color: var(--brand); }
-.hero-tagline { font-family: "Public Sans", sans-serif; font-weight: 400; font-size: 17px; line-height: 1.6; color: var(--ink-soft); max-width: 46ch; margin: 0 0 26px; }
+.hero-tagline { font-family: "Public Sans", sans-serif; font-weight: 400; font-size: 17px; line-height: 1.6; color: var(--ink-soft); max-width: 46ch; margin: 0 0 34px; }
 
 .scan-section { width: 100%; max-width: var(--scan-bar-max); box-sizing: border-box; margin-bottom: 22px; }
 .scan-form { display: flex; flex-direction: column; gap: 12px; }
@@ -518,17 +518,22 @@ h2 { font-family: "Newsreader", Georgia, serif; font-weight: 600; font-size: 21p
 .scan-hint-tip svg { color: #B89340; }
 /* A clear step below the hint (.scan-section's own margin-bottom, not a
    margin here) -- the checks are a separate block, not part of the hint's
-   sentence. justify-content:space-between (not center) spreads the three
-   checks to the pill's own left and right edges, so the row visually
-   spans the same width as the pill above it instead of reading as a
-   narrower, centered island. Sized up from 12.5px -> 14px so the row
+   sentence. justify-content:space-between pinned the three items to the
+   pill's exact left/right pixel edges, which is exactly what made the
+   row fragile: any font-metric difference between browsers (confirmed --
+   this measured flush in both Chromium and WebKit here, yet still
+   overflowed past the pill's edge in a real browser) tips the last item
+   past the edge with zero margin for error. Centered with a fixed gap
+   instead -- still constrained to the pill's own width via max-width, so
+   it can't exceed the pill's edges, but doesn't depend on pixel-perfect
+   text measurement to avoid overflowing it. Sized up to 16px so the row
    reads as a real trust signal, not a small-print footnote. */
 .trust-row {
-  display: flex; flex-wrap: wrap; justify-content: space-between; gap: 12px 16px; font-size: 14px; color: var(--ink-soft);
+  display: flex; flex-wrap: wrap; justify-content: center; gap: 12px 22px; font-size: 16px; color: var(--ink-soft);
   width: 100%; max-width: var(--scan-bar-max); box-sizing: border-box;
 }
 .trust-row span { display: flex; align-items: center; gap: 6px; }
-.trust-row svg { width: 15px; height: 15px; color: var(--ok); flex-shrink: 0; }
+.trust-row svg { width: 16px; height: 16px; color: var(--ok); flex-shrink: 0; }
 
 /* The one glass/depth moment in the hero -- a fixed dark ground (not
    theme-reactive, deliberately: it's a stand-in browser chrome, meant to
