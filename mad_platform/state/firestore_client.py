@@ -102,8 +102,13 @@ def _devices() -> firestore.CollectionReference:
 # Read at call time, not into a module constant, so a test can set them
 # and so nothing here needs an environment at import (see config.py).
 _LIMIT_DEFAULTS = {
-    "MAD_MAX_SCANS_PER_EMAIL_PER_DAY": 3,
-    "MAD_MAX_SCANS_PER_IP_PER_DAY": 5,
+    # Per-email lower than per-IP on purpose: per-IP is the outer ceiling
+    # (a shared NAT is still one real household or office), per-email is
+    # the inner one (one person shouldn't need more than a handful of
+    # scans in a day), so the two bound the same traffic from different
+    # angles rather than duplicating one limit.
+    "MAD_MAX_SCANS_PER_EMAIL_PER_DAY": 10,
+    "MAD_MAX_SCANS_PER_IP_PER_DAY": 15,
     "MAD_MAX_SCANS_PER_MONTH": 500,  # a scan-count proxy for the $ budget, see DECISIONS_LOG.md
     "MAD_MAX_FEEDBACK_PER_IP_PER_DAY": 10,
     # Verification-code guesses one address may submit in a day, across

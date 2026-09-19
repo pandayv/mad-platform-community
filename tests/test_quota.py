@@ -117,14 +117,17 @@ def test_limits_are_defined_in_one_place():
 # --- B7: the limits are policy in source, tunable by environment -----------
 
 
-def test_per_ip_default_is_the_intended_five_not_the_benchmark_fifteen(monkeypatch):
-    """The regression this guards: MAX_SCANS_PER_IP_PER_DAY was raised to
-    15 for a benchmark run under a "revert to 5 after" comment and shipped
-    that way. A temporary ceiling now lives in an env var on one revision,
-    never in source.
+def test_per_ip_default_is_the_current_intended_value(monkeypatch):
+    """15 is a deliberate policy value (raised from the original 5 once the
+    real per-email/per-IP split made 5 feel too tight for a shared
+    household or office), not a repeat of the old benchmark-leftover bug
+    this test used to guard against -- see
+    test_no_source_file_carries_a_temporary_limit_marker for that guard,
+    which checks the *shape* of the mistake (an untracked "TEMP" marker in
+    source) rather than pinning one specific number forever.
     """
     monkeypatch.delenv("MAD_MAX_SCANS_PER_IP_PER_DAY", raising=False)
-    assert fs.max_scans_per_ip_per_day() == 5
+    assert fs.max_scans_per_ip_per_day() == 15
 
 
 def test_no_source_file_carries_a_temporary_limit_marker():
@@ -138,8 +141,11 @@ def test_no_source_file_carries_a_temporary_limit_marker():
 
 
 def test_environment_overrides_the_limit(monkeypatch):
-    monkeypatch.setenv("MAD_MAX_SCANS_PER_IP_PER_DAY", "15")
-    assert fs.max_scans_per_ip_per_day() == 15
+    # A value distinct from the current default (15) -- otherwise this
+    # can't tell "the override took effect" apart from "the override was
+    # silently ignored and the default happened to match."
+    monkeypatch.setenv("MAD_MAX_SCANS_PER_IP_PER_DAY", "30")
+    assert fs.max_scans_per_ip_per_day() == 30
 
 
 @pytest.mark.parametrize("bad", ["", "abc", "0", "-3", "5.5"])
@@ -148,7 +154,7 @@ def test_an_unusable_override_falls_back_to_the_default(monkeypatch, bad):
     (nobody can scan) or a negative one (nobody is limited).
     """
     monkeypatch.setenv("MAD_MAX_SCANS_PER_IP_PER_DAY", bad)
-    assert fs.max_scans_per_ip_per_day() == 5
+    assert fs.max_scans_per_ip_per_day() == 15
 
 
 def test_limits_are_read_at_call_time_not_frozen_at_import(monkeypatch):
