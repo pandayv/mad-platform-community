@@ -502,17 +502,23 @@ h2 { font-family: "Newsreader", Georgia, serif; font-weight: 600; font-size: 21p
    step (first-time visitors only) never lands as a surprise. */
 /* Sits above the pill, not below -- the margin is on the bottom (a small
    gap before the pill) rather than the top, since the hero-tagline's own
-   margin-bottom already supplies the gap above this. */
-.scan-hint { display: flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--muted); margin: 0 0 10px; }
+   margin-bottom already supplies the gap above this. Centered to the
+   pill's own width (not the wider headline/tagline column above it) so
+   the tip and the trust checks below read as anchored to the pill they
+   flank, rather than hugging the left edge of a much wider box. */
+.scan-hint { display: flex; align-items: center; justify-content: center; gap: 6px; font-size: 12.5px; color: var(--muted); margin: 0 0 10px; }
 .scan-hint svg { width: 14px; height: 14px; color: var(--ok); flex-shrink: 0; }
-/* The lightbulb (a heads-up, first-time visitors only) deliberately isn't
-   --ok green -- that color already means "verified/succeeded" for the
-   returning-visitor checkmark that occupies this same slot, and this
-   message is neither: it's a plain notice, not a success state. --brand
-   keeps it visually related (still an icon+text hint) without borrowing
-   a color that means something more specific elsewhere on the page. */
-.scan-hint-tip svg { color: var(--brand); }
-.trust-row { display: flex; flex-wrap: wrap; gap: 16px; font-size: 12.5px; color: var(--ink-soft); }
+/* A muted amber, not --brand -- this icon is meant to read as a literal
+   lightbulb (a "tip" affordance), which only works with a yellow/gold
+   hue; the teal brand color didn't evoke that. Kept muted/desaturated
+   rather than a vivid yellow, and distinct from the star rating's warmer,
+   more saturated gold (#F0A93A) so the two don't visually collide as
+   "the same color means two different things" elsewhere on the site. */
+.scan-hint-tip svg { color: #B89340; }
+.trust-row {
+  display: flex; flex-wrap: wrap; justify-content: center; gap: 16px; font-size: 12.5px; color: var(--ink-soft);
+  width: 100%; max-width: var(--scan-bar-max); box-sizing: border-box;
+}
 .trust-row span { display: flex; align-items: center; gap: 6px; }
 .trust-row svg { width: 14px; height: 14px; color: var(--ok); flex-shrink: 0; }
 
