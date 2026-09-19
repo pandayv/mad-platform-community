@@ -1,5 +1,9 @@
 # MAD Platform — Community Edition
 
+[![Stars](https://img.shields.io/github/stars/pandayv/mad-platform-community?style=flat)](https://github.com/pandayv/mad-platform-community/stargazers)
+[![Forks](https://img.shields.io/github/forks/pandayv/mad-platform-community?style=flat)](https://github.com/pandayv/mad-platform-community/forks)
+[![License: AGPL v3](https://img.shields.io/badge/License-AGPL%20v3-blue.svg)](LICENSE)
+
 **Multi-Agent Defense Platform, for accessibility compliance.** A free tool
 that scans a website for accessibility problems, checks its own findings
 before showing them to you, and gives you a concrete fix for each one, not
@@ -193,10 +197,11 @@ the code again.
 
 ### The fast path: one script
 
-[Use this template](https://github.com/new?template_name=mad-platform-community&template_owner=pandayv)
-to get your own copy of this repo (GitHub keeps a permanent "generated
-from pandayv/mad-platform-community" link on it), then clone your copy
-and run:
+[**Fork this repo**](https://github.com/pandayv/mad-platform-community/fork)
+to run your own instance. Forking (rather than a disconnected copy) keeps
+you connected to this repo — `git pull` from upstream to get fixes, and
+open a PR back if you build something worth sharing. Then clone your
+fork and run:
 
 ```bash
 git clone https://github.com/YOUR_USERNAME/YOUR_REPO.git
@@ -211,6 +216,16 @@ export PROJECT_ID=YOUR_PROJECT_ID
 order, idempotently (safe to re-run after a partial failure — it checks
 whether each resource exists before creating it). It ends with a working
 public instance at your own Cloud Run URL.
+
+Want a clean break instead of a connected fork (building something
+substantially different rather than running your own instance)?
+[Use this repo as a template](https://github.com/new?template_name=mad-platform-community&template_owner=pandayv)
+to get a disconnected copy instead.
+
+Either way, this code is [AGPL-3.0 licensed](#license) — running a
+modified version as a hosted service for others still requires making
+your source available under the same terms, whether you got here by
+forking, using the template, or cloning directly.
 
 The numbered steps below are what `setup.sh` automates — read them if you
 want to understand what it's doing, customize a step, or run things by
