@@ -482,11 +482,6 @@ def _render_form(error: str | None = None, device_verified: bool = False) -> str
       <p class="hero-tagline">Check your website's accessibility and get exactly what to fix, in plain English. Protect your business from expensive accessibility lawsuits.</p>
 
       <div class="scan-section">
-        {
-          '<p class="scan-hint"><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M5 13l4 4L19 7"/></svg>Device recognized. Your scan starts instantly.</p>'
-          if device_verified else
-          '<p class="scan-hint scan-hint-tip"><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18h6"/><path d="M10 22h4"/><path d="M12 2a7 7 0 0 0-4 12.7c.6.5 1 1.3 1 2.1v.2h6v-.2c0-.8.4-1.6 1-2.1A7 7 0 0 0 12 2Z"/></svg>First scan requires email verification to prevent abuse.</p>'
-        }
         <form class="scan-form" action="/scan/start" method="post" aria-label="Scan your website for accessibility issues">
           <div class="scan-bar">
             <div class="scan-bar-field">
@@ -508,6 +503,11 @@ def _render_form(error: str | None = None, device_verified: bool = False) -> str
         <span><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M5 13l4 4L19 7"/></svg>Dedicated to community</span>
         <span><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M5 13l4 4L19 7"/></svg>100% free</span>
       </div>
+      {
+        '<p class="scan-hint"><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M5 13l4 4L19 7"/></svg>Device recognized. Your scan starts instantly.</p>'
+        if device_verified else
+        '<p class="scan-hint scan-hint-tip"><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18h6"/><path d="M10 22h4"/><path d="M12 2a7 7 0 0 0-4 12.7c.6.5 1 1.3 1 2.1v.2h6v-.2c0-.8.4-1.6 1-2.1A7 7 0 0 0 12 2Z"/></svg>First scan requires email verification to prevent abuse.</p>'
+      }
     </div>
 
     <div class="hero-visual-col">

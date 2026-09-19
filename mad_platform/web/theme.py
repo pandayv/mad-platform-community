@@ -500,13 +500,17 @@ h2 { font-family: "Newsreader", Georgia, serif; font-weight: 600; font-size: 21p
    page itself, just surfaced earlier -- at the actual point someone
    decides to click Scan, not several sections below it, so the email
    step (first-time visitors only) never lands as a surprise. */
-/* Sits above the pill, not below -- the margin is on the bottom (a small
-   gap before the pill) rather than the top, since the hero-tagline's own
-   margin-bottom already supplies the gap above this. Centered to the
-   pill's own width (not the wider headline/tagline column above it) so
-   the tip and the trust checks below read as anchored to the pill they
-   flank, rather than hugging the left edge of a much wider box. */
-.scan-hint { display: flex; align-items: center; justify-content: center; gap: 6px; font-size: 12.5px; color: var(--muted); margin: 0 0 10px; }
+/* Sits below the trust checks (last thing in the hero, a closing note
+   rather than an opening one) -- margin-top only, since .trust-row
+   supplies its own gap above via .scan-section's margin-bottom. Centered
+   to the pill's own width, not the wider headline/tagline column, and
+   given that same explicit width -- it's no longer nested inside
+   .scan-section, so it needs its own width:100%/max-width pair to have
+   room to center within, the same fix .trust-row already needed. */
+.scan-hint {
+  display: flex; align-items: center; justify-content: center; gap: 6px; font-size: 12.5px; color: var(--muted);
+  width: 100%; max-width: var(--scan-bar-max); box-sizing: border-box; margin: 10px 0 0;
+}
 .scan-hint svg { width: 14px; height: 14px; color: var(--ok); flex-shrink: 0; }
 /* A muted amber, not --brand -- this icon is meant to read as a literal
    lightbulb (a "tip" affordance), which only works with a yellow/gold
