@@ -137,6 +137,11 @@ what's actually running, not just stated intent.
    service checks whether the WCAG standard itself has changed,
    auto-refreshing for minor additive updates and routing structural
    changes to human review before acting on them.
+8. **Asks how it did.** A short, open feedback form (star rating,
+   comment, optional testimonial opt-in) reachable from the completed
+   scan, the report, the report email, and the FAQ alike — not gated
+   behind proof you scanned anything, just rate-limited like every other
+   public form here.
 
 ## What a scan looks like
 
@@ -210,7 +215,7 @@ scanners, backed by things actually checked, not marketing copy:
   addresses; an access-code gate (Secret Manager) on the SME review queue
   exists and fails *closed* if unconfigured, for anyone who wants to run
   a private instance instead of a public one
-- **Testing:** pytest, 160+ tests covering the pure logic, the LLM-output
+- **Testing:** pytest, 330+ tests covering the pure logic, the LLM-output
   validation boundary, and the FastAPI routes that don't need live GCP —
   see [Running the tests](#running-the-tests)
 
@@ -567,12 +572,16 @@ mad_platform/
                   # LLM-output index validation (shared trust boundary)
   tools/         # Crawler, rule checks, AI checks, ADK client, RAG,
                   # WCAG version fetch, issue sink, Slack/email notify,
-                  # anti-abuse pre-filters, SSRF-safe URL guard
+                  # anti-abuse pre-filters, SSRF-safe URL guard, retry
+                  # classification, untrusted-content delimiting
   state/         # Firestore + Cloud Storage clients (lazy singletons)
   web/           # scan-onboarding's app (submission UI, status page, SME
-                  # review queue), scan-worker's app (the pipeline's push
-                  # target), scan-wcag-poller's app, shared theme/charts
+                  # review queue, open feedback form), scan-worker's app
+                  # (the pipeline's push target), scan-wcag-poller's app,
+                  # shared theme/charts
   data/          # Curated WCAG success-criteria corpus
+  severity.py    # The severity vocabulary, defined once (a real Literal
+                  # type, not five independently-drifting string lists)
   config.py      # The one place required environment configuration is
                   # read -- no defaults for anything naming a cloud
                   # resource, values read lazily so import stays
@@ -617,16 +626,19 @@ deciding how the SME review queue should weigh a site's own review
 history, so a pattern a reviewer already confirmed on that site doesn't
 re-escalate identically on every future run.
 
-An internal code-review pass is also in progress: `CODE_REVIEW_FINDINGS.md`
-and `CODE_REVIEW_FIXES.md` (both gitignored, kept locally) track hardening
-work beyond new features — the first backend pass closed a
-same-hackathon-project GCP config fallback, made every module's GCP
-clients lazy so an actual test suite could exist, closed a race between a
-scan being marked complete and its summary being written, added bounds
-checking on every LLM-returned index, fixed an escalation idempotency-key
-collision between different users' scans, made the anti-abuse quota check
-a real Firestore transaction, and closed a fail-open bug in the SME
-review queue's access gate.
+An internal code-review audit also ran against this codebase, in two
+passes: `CODE_REVIEW_FINDINGS.md` and `CODE_REVIEW_FIXES.md` (both
+gitignored, kept locally, not published) track the full list and the
+reasoning behind each fix. Highlights: closed a same-hackathon-project GCP
+config fallback, made every module's GCP clients lazy so an actual test
+suite could exist, closed a race between a scan being marked complete and
+its summary being written, added bounds checking on every LLM-returned
+index, fixed an escalation idempotency-key collision between different
+users' scans, made the anti-abuse quota check a real Firestore
+transaction, closed a fail-open bug in the SME review queue's access
+gate, hardened the crawler's SSRF guard against redirects, delimited
+scanned-site HTML before it reaches any prompt, and moved all four
+container images to a non-root user on a digest-pinned base image.
 
 ## Built during the hackathon submission window
 
