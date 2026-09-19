@@ -828,11 +828,19 @@ h2 { font-family: "Newsreader", Georgia, serif; font-weight: 600; font-size: 21p
 .compare-table .mark-yes { color: var(--brand-dark); }
 .compare-table .mark-no { color: var(--muted); }
 .compare-table .mark-partial { font-size: 11.5px; color: var(--muted); }
-.compare-footnote {
-  max-width: 720px; margin: 0 auto 40px; text-align: center;
+/* One note per line, left-aligned -- five citations run together in a
+   single centered paragraph (the previous .compare-footnote) forced the
+   reader to hunt for where one ended and the next began; separate lines
+   read like the citation list they actually are. The block itself still
+   sits centered under the table (max-width + margin:auto), only the text
+   inside it is left-aligned rather than the whole paragraph. */
+.compare-footnotes { max-width: 720px; margin: 0 auto 40px; }
+.compare-footnotes p {
+  margin: 0 0 8px; text-align: left;
   font-size: 12.5px; line-height: 1.6; color: var(--muted);
 }
-.compare-footnote sup { color: var(--brand-dark); font-weight: 700; }
+.compare-footnotes p:last-child { margin-bottom: 0; }
+.compare-footnotes sup { color: var(--brand-dark); font-weight: 700; }
 
 /* ---- numbered trust/FAQ/terms lists ---- */
 .trust-list { list-style: none; counter-reset: trust-item; margin: 0; padding: 0; }

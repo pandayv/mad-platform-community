@@ -674,7 +674,7 @@ def _render_form(error: str | None = None, device_verified: bool = False) -> str
 
 <section class="section" id="how-we-compare">
   <div class="section-head">
-    <div class="section-eyebrow"><span class="line"></span><span>The comparison</span><span class="line"></span></div>
+    <div class="section-eyebrow"><span class="line"></span><span>The breakdown</span><span class="line"></span></div>
     <h2>How we compare</h2>
     <p>What we actually checked, not marketing copy.</p>
   </div>
@@ -746,7 +746,13 @@ def _render_form(error: str | None = None, device_verified: bool = False) -> str
       </tbody>
     </table>
   </div>
-  <p class="compare-footnote"><sup>1</sup> Most free checkers cap what's included and require a paid tier for full scans. <sup>2</sup> Rule-based scanners check the underlying code; they don't evaluate what the page actually looks like once it renders. <sup>3</sup> Automated scanners are well known for flagging non-issues; catching what they get wrong is typically a separate paid add-on for these tools. <sup>4</sup> The FTC fined a major overlay-widget vendor $1M in 2025 for overstating what its auto-fix could actually do. <sup>5</sup> MAD Platform checks the accessibility standard (WCAG) for changes and updates its rules automatically.</p>
+  <div class="compare-footnotes">
+    <p><sup>1</sup> Most free checkers cap what's included and require a paid tier for full scans.</p>
+    <p><sup>2</sup> Rule-based scanners check the underlying code; they don't evaluate what the page actually looks like once it renders.</p>
+    <p><sup>3</sup> Automated scanners are well known for flagging non-issues; catching what they get wrong is typically a separate paid add-on for these tools.</p>
+    <p><sup>4</sup> The FTC fined a major overlay-widget vendor $1M in 2025 for overstating what its auto-fix could actually do.</p>
+    <p><sup>5</sup> MAD Platform checks the accessibility standard (WCAG) for changes and updates its rules automatically.</p>
+  </div>
 </section>
 </main>
 
