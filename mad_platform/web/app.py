@@ -1338,6 +1338,12 @@ const PHASE_LABELS = {
   generating_report: "Generating your report...",
 };
 
+// Captured once, before renderQueued ever overwrites #tagline with the
+// queued-specific "waiting for a slot" text -- renderInProgress restores
+// this so a job that passed through the queue doesn't keep showing
+// "waiting for a slot to free up" after it has actually started scanning.
+const DEFAULT_TAGLINE = document.getElementById("tagline").textContent;
+
 let startTimeMs = null;
 let finished = false;
 
@@ -1388,6 +1394,7 @@ function renderInProgress(data) {
   document.getElementById("scan-beam").style.display = "block";
   if (!startTimeMs && (data.started_at || data.created_at)) startTimeMs = new Date(data.started_at || data.created_at).getTime();
   document.getElementById("heading").textContent = "Scanning " + data.url;
+  document.getElementById("tagline").textContent = DEFAULT_TAGLINE;
   const phaseLabel = PHASE_LABELS[data.phase] || "Starting...";
   let rows = Object.entries(data.pages).map(([url, info]) => {
     const stage = info.stage || "pending";
