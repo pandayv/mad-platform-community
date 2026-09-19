@@ -386,7 +386,7 @@ h2 { font-family: "Newsreader", Georgia, serif; font-weight: 600; font-size: 21p
 .hero-title strong { font-weight: 800; color: var(--brand); }
 .hero-tagline { font-family: "Public Sans", sans-serif; font-weight: 400; font-size: 17px; line-height: 1.6; color: var(--ink-soft); max-width: 46ch; margin: 0 0 26px; }
 
-.scan-section { width: 100%; max-width: var(--scan-bar-max); box-sizing: border-box; margin-bottom: 16px; }
+.scan-section { width: 100%; max-width: var(--scan-bar-max); box-sizing: border-box; margin-bottom: 22px; }
 .scan-form { display: flex; flex-direction: column; gap: 12px; }
 
 /* Google-proportioned: a plain surface with a light shadow, not the
@@ -500,16 +500,13 @@ h2 { font-family: "Newsreader", Georgia, serif; font-weight: 600; font-size: 21p
    page itself, just surfaced earlier -- at the actual point someone
    decides to click Scan, not several sections below it, so the email
    step (first-time visitors only) never lands as a surprise. */
-/* Sits below the trust checks (last thing in the hero, a closing note
-   rather than an opening one) -- margin-top only, since .trust-row
-   supplies its own gap above via .scan-section's margin-bottom. Centered
-   to the pill's own width, not the wider headline/tagline column, and
-   given that same explicit width -- it's no longer nested inside
-   .scan-section, so it needs its own width:100%/max-width pair to have
-   room to center within, the same fix .trust-row already needed. */
+/* Sits close under the pill (small margin-top, inside .scan-section) --
+   a footnote to the field right above it, not a separate block. Centered
+   to the pill's own width rather than the wider headline/tagline column
+   above it, so it reads as anchored to the field it's annotating. */
 .scan-hint {
   display: flex; align-items: center; justify-content: center; gap: 6px; font-size: 12.5px; color: var(--muted);
-  width: 100%; max-width: var(--scan-bar-max); box-sizing: border-box; margin: 10px 0 0;
+  margin: 8px 0 0;
 }
 .scan-hint svg { width: 14px; height: 14px; color: var(--ok); flex-shrink: 0; }
 /* A muted amber, not --brand -- this icon is meant to read as a literal
@@ -519,12 +516,19 @@ h2 { font-family: "Newsreader", Georgia, serif; font-weight: 600; font-size: 21p
    more saturated gold (#F0A93A) so the two don't visually collide as
    "the same color means two different things" elsewhere on the site. */
 .scan-hint-tip svg { color: #B89340; }
+/* A clear step below the hint (.scan-section's own margin-bottom, not a
+   margin here) -- the checks are a separate block, not part of the hint's
+   sentence. justify-content:space-between (not center) spreads the three
+   checks to the pill's own left and right edges, so the row visually
+   spans the same width as the pill above it instead of reading as a
+   narrower, centered island. Sized up from 12.5px -> 14px so the row
+   reads as a real trust signal, not a small-print footnote. */
 .trust-row {
-  display: flex; flex-wrap: wrap; justify-content: center; gap: 16px; font-size: 12.5px; color: var(--ink-soft);
+  display: flex; flex-wrap: wrap; justify-content: space-between; gap: 12px 16px; font-size: 14px; color: var(--ink-soft);
   width: 100%; max-width: var(--scan-bar-max); box-sizing: border-box;
 }
 .trust-row span { display: flex; align-items: center; gap: 6px; }
-.trust-row svg { width: 14px; height: 14px; color: var(--ok); flex-shrink: 0; }
+.trust-row svg { width: 15px; height: 15px; color: var(--ok); flex-shrink: 0; }
 
 /* The one glass/depth moment in the hero -- a fixed dark ground (not
    theme-reactive, deliberately: it's a stand-in browser chrome, meant to
