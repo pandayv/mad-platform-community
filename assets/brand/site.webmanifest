@@ -1,0 +1,14 @@
+{
+  "name": "MAD Platform",
+  "short_name": "MAD Platform",
+  "description": "Free, self-serve accessibility scans for small business websites.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#EDF2F1",
+  "theme_color": "#0B6E66",
+  "icons": [
+    { "src": "/static/favicon-32.png", "sizes": "32x32", "type": "image/png" },
+    { "src": "/static/icon-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "/static/apple-touch-icon.png", "sizes": "180x180", "type": "image/png" }
+  ]
+}
