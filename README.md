@@ -588,10 +588,10 @@ cloudbuild.worker.yaml / cloudbuild.wcag_poller.yaml / cloudbuild.pattern_miner.
 ## Support this project
 
 MAD Platform Community is free, with no ads and no paywall on the actual
-scan. If it saved you the cost of a manual audit, you can leave a tip at
+scan. 
+You can support the project at
 [buymeacoffee.com/madplatform](https://buymeacoffee.com/madplatform) — a
-link to the same page is in the site footer and on every completed
-report.
+link to the same page is in the site footer.
 
 ## License
 
