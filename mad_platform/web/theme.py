@@ -435,16 +435,45 @@ h2 { font-family: "Newsreader", Georgia, serif; font-weight: 600; font-size: 21p
 /* Every OTHER field in the funnel (email step, code step) keeps the
    plainer boxed-field treatment -- only the homepage's URL entry gets the
    merged-pill emphasis, since it's the one field on the page. */
-.scan-field { position: relative; }
-.scan-field input {
+.scan-field { position: relative; margin-bottom: 16px; }
+.scan-field input, .scan-field textarea {
   display: block; width: 100%; box-sizing: border-box; margin: 0;
   border: 1px solid var(--glass-border); background: var(--glass-strong); color: var(--ink);
   border-radius: 12px; padding: 13px 16px; font-size: 15.5px; font-family: inherit;
-  box-shadow: var(--glass-shadow);
+  box-shadow: var(--glass-shadow); resize: vertical;
   backdrop-filter: blur(20px) saturate(160%); -webkit-backdrop-filter: blur(20px) saturate(160%);
 }
-.scan-field input::placeholder { color: var(--muted); }
-.scan-field input:focus { outline: none; border-color: var(--brand); box-shadow: 0 0 0 3px var(--brand-tint); }
+.scan-field input::placeholder, .scan-field textarea::placeholder { color: var(--muted); }
+.scan-field input:focus, .scan-field textarea:focus { outline: none; border-color: var(--brand); box-shadow: 0 0 0 3px var(--brand-tint); }
+/* The feedback form's star rating and testimonial checkbox -- plain
+   radios/checkbox under the hood (no JS required to submit; the one
+   script on this page only drives the live character count below),
+   styled well past their default look.
+
+   Classic pure-CSS star trick: five radio+label pairs written 5,4,3,2,1
+   in DOM order, then visually un-reversed with flex-direction so star 1
+   sits leftmost. That ordering is what lets a plain ~ (general sibling)
+   selector mean "this star and everything before it, visually" --
+   hovering or checking star N matches every label *after* N in DOM
+   order, which is every star at or below N on screen. */
+.rating-field { border: none; margin: 0 0 18px; padding: 0; }
+.star-rating { display: flex; flex-direction: row-reverse; justify-content: flex-end; gap: 2px; margin-top: 8px; }
+.star-rating input { position: absolute; opacity: 0; width: 0; height: 0; }
+.star-rating label { display: block; color: var(--border); cursor: pointer; }
+.star-rating label svg { width: 34px; height: 34px; display: block; }
+.star-rating input:checked ~ label,
+.star-rating label:hover,
+.star-rating label:hover ~ label {
+  color: #F0A93A; /* a warm gold, not --brand -- stars read as a rating
+    convention independent of the site's own accent color, the same way
+    a real star rating would on any product regardless of its brand hue */
+}
+.star-rating input:focus-visible + label { outline: 2px solid var(--focus); outline-offset: 3px; border-radius: 6px; }
+.feedback-checkbox {
+  display: flex; align-items: center; gap: 8px; font-size: 14px; color: var(--ink-soft);
+  margin-bottom: 16px; cursor: pointer;
+}
+.feedback-checkbox input { width: 16px; height: 16px; flex-shrink: 0; accent-color: var(--brand); }
 .scan-submit {
   align-self: flex-end; justify-content: center; font-size: 14px;
   border-radius: 10px !important; padding: 10px 20px !important; margin-top: 2px;

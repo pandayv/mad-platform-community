@@ -360,7 +360,8 @@ header .meta {{ color: var(--muted); font-size: 13.5px; margin-top: 4px; }}
   not raw technical severity alone.
   <p style="margin-top:10px">This scan was free, no account needed. If it saved you the
   cost of a manual audit, you can <a href="https://buymeacoffee.com/madplatform"
-  target="_blank" rel="noopener">buy the project a coffee</a>.</p>
+  target="_blank" rel="noopener">buy the project a coffee</a>. Good or bad, we'd also like to
+  know how it went: <a href="{feedback_url}">leave feedback</a>.</p>
 </footer>
 <script>
 // Findings under internal review show "Awaiting internal review" as of
@@ -456,6 +457,7 @@ async def draft_report(
         findings_section=findings_section,
         app_base_url=config.app_base_url(),
         brand_mark=theme.BRAND_MARK,
+        feedback_url=f"{config.app_base_url()}/feedback" + (f"?job={job_id}" if job_id else ""),
     )
     return html, exec_summary, score, counts
 
@@ -482,6 +484,7 @@ def draft_email_summary(
     exec_summary: str,
     report_url: str,
     csv_url: str,
+    job_id: str,
 ) -> str:
     """A separate, deliberately much simpler rendering for the email body --
     not draft_report()'s template reused. That template is a full standalone
@@ -564,6 +567,8 @@ def draft_email_summary(
   <p style="font-size:12px;color:#5B6B6A;line-height:1.6;margin:8px 0 0">This scan was generated
     for free by MAD Platform, a self-funded, open-source project. If it saved you the cost of a
     manual audit, you can <a href="https://buymeacoffee.com/madplatform" style="color:#0B6E66">buy
-    the project a coffee</a>.</p>
+    the project a coffee</a>. Good or bad, we'd also like to know how it went:
+    <a href="{config.app_base_url()}/feedback?job={job_id}" style="color:#0B6E66">leave
+    feedback</a>.</p>
 </div>
 """

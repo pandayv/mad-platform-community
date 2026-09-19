@@ -105,6 +105,7 @@ _LIMIT_DEFAULTS = {
     "MAD_MAX_SCANS_PER_EMAIL_PER_DAY": 3,
     "MAD_MAX_SCANS_PER_IP_PER_DAY": 5,
     "MAD_MAX_SCANS_PER_MONTH": 500,  # a scan-count proxy for the $ budget, see DECISIONS_LOG.md
+    "MAD_MAX_FEEDBACK_PER_IP_PER_DAY": 10,
 }
 
 
@@ -137,6 +138,10 @@ def max_scans_per_ip_per_day() -> int:
 
 def max_scans_per_month() -> int:
     return _limit("MAD_MAX_SCANS_PER_MONTH")
+
+
+def max_feedback_per_ip_per_day() -> int:
+    return _limit("MAD_MAX_FEEDBACK_PER_IP_PER_DAY")
 
 
 # How long a scan record (the job document: submitted URL, owner email,
@@ -697,41 +702,85 @@ def refund_scan_quota(email: str, ip: str) -> None:
         logger.exception("Failed to refund scan quota for %r / %r", quota_email_key(email), ip)
 
 
-def save_feedback(job_id: str, rating: int, comment: str = "", allow_testimonial: bool = False, contact: str | None = None) -> None:
-    """The immediate "was this helpful" prompt shown on the report page and
-    in the report email. Deliberately separate from scan_jobs (this can be
-    submitted well after a job document might reasonably change shape) and
-    from a delayed outreach flow -- asking at the moment the report is
-    delivered gets meaningfully better response rates than a cold follow-up
-    days later.
+def check_and_reserve_feedback_quota(ip: str) -> tuple[bool, str]:
+    """The feedback form's own, separate rate limit -- not the scan quota.
+
+    Feedback is deliberately open (no review token, no proof you ever
+    scanned anything: CODE_REVIEW_FINDINGS.md F5 closed the token-gated
+    version's real bug, which was unbounded writes with a caller-controlled
+    allow_testimonial flag, not the absence of a token as such). Openness
+    still needs *some* ceiling on write volume, just a much more generous
+    one than scanning: a Firestore write here costs nothing like a
+    Playwright render plus a dozen Gemini calls, so this is a simple
+    non-transactional per-IP daily counter, not the transactional
+    reserve-before-spend machinery check_and_reserve_scan_quota needs to
+    protect real spend. A race under concurrent submissions could let a
+    couple of extra writes through; that is an acceptable trade against the
+    complexity of a transaction for a resource this cheap.
+    """
+    now = datetime.now(timezone.utc)
+    day_key = now.strftime("%Y-%m-%d")
+    ref = _usage().document(f"feedback_ip_{ip}_{day_key}")
+    doc = ref.get()
+    count = doc.to_dict().get("count", 0) if doc.exists else 0
+    if count >= max_feedback_per_ip_per_day():
+        return False, "You've reached today's feedback limit. Please try again tomorrow."
+    ref.set({"count": count + 1, "updated_at": now, "expires_at": now + timedelta(days=2)}, merge=True)
+    return True, ""
+
+
+def save_feedback(
+    job_id: str | None,
+    rating: int,
+    comment: str = "",
+    allow_testimonial: bool = False,
+    contact: str | None = None,
+    url: str | None = None,
+) -> None:
+    """The "how did it go" prompt, reachable from the report page, the
+    report email, and the FAQ alike -- not scoped to one scan (job_id is
+    optional: someone reading the FAQ has nothing to reference yet). When
+    it is known, it's carried along for context, not as an authorization
+    check. Deliberately separate from scan_jobs (this can be submitted well
+    after a job document might reasonably change shape) and from a delayed
+    outreach flow -- asking at the moment the report is delivered gets
+    meaningfully better response rates than a cold follow-up days later.
+
+    url is independent of job_id: the form field is editable (pre-filled
+    from the job's own URL when one is known, but the visitor can change
+    or clear it), so what's stored is what they actually said the
+    feedback was about, not necessarily what a linked job says.
     """
     now = datetime.now(timezone.utc)
     _feedback().add(
         {
             "job_id": job_id,
+            "url": url,
             "rating": rating,
             "comment": comment,
             "allow_testimonial": allow_testimonial,
             "contact": contact,
             "created_at": now,
-            # TTL, same window as the scan it is about. `contact` is a
-            # free-text email the submitter typed, so this is personal data
-            # with no reason to outlive the scan record it comments on.
+            # TTL, same window as a scan record. `contact` is a free-text
+            # value the submitter typed, so this is personal data with no
+            # reason to outlive the window any other personal data here
+            # gets, whether or not it references a particular scan.
             "expires_at": _scan_record_expiry(now),
         }
     )
 
 
-def has_feedback(job_id: str) -> bool:
-    """Whether this job already has a feedback submission.
-
-    Used to make the public feedback endpoint single-use per job: without
-    it, one job ID is an unlimited write channel into this collection
-    (CODE_REVIEW_FINDINGS.md F5). limit(1) because existence is the only
-    question being asked.
+def list_feedback(limit: int = 200) -> list[dict[str, Any]]:
+    """Most recent first, for the internal review page -- there is no
+    "pending" state to filter on here the way escalations have one, since
+    nothing about feedback needs a disposition; it is read, not resolved.
+    Capped rather than unbounded: this collection has no cursor/pagination
+    UI yet, and a year of retention (SCAN_RECORD_RETENTION_DAYS) is enough
+    time to accumulate more rows than one page should try to render at
+    once.
     """
-    existing = _feedback().where(filter=firestore.FieldFilter("job_id", "==", job_id)).limit(1).get()
-    return len(list(existing)) > 0
+    docs = _feedback().order_by("created_at", direction=firestore.Query.DESCENDING).limit(limit).stream()
+    return [{"id": doc.id, **doc.to_dict()} for doc in docs]
 
 
 @firestore.transactional

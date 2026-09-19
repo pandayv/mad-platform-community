@@ -860,12 +860,18 @@ def _render_form(error: str | None = None, device_verified: bool = False) -> str
 
 
 def _verification_page(
-    title: str, tagline: str, body_html: str, error: str | None = None, footnote_html: str = ""
+    title: str, tagline: str, body_html: str, error: str | None = None, footnote_html: str = "", max_width: int = 440
 ) -> str:
     """Shared chrome for the email/code interstitial screens -- same
     header/footer as every other page (see the landing-page nav-
     consistency fix), just a narrower single-purpose card instead of the
     homepage's full marketing layout.
+
+    max_width defaults to the funnel steps' own narrow 440px (a single
+    field genuinely doesn't need more), but is a real parameter, not a
+    hardcoded style, for callers like the feedback form with several
+    fields side by side -- 440px read as a form stuffed into a quarter of
+    the page on an actual desktop viewport, not "focused."
 
     footnote_html renders below the card, not inside it -- the same
     "spacing separates it, not a border" treatment as the landing page's
@@ -886,7 +892,7 @@ def _verification_page(
 <body>
 {_SKIP_LINK}
 {_site_header("/")}
-<main id="main" class="page with-site-header" style="max-width:440px">
+<main id="main" class="page with-site-header" style="max-width:{max_width}px">
   <h1>{title}</h1>
   <p class="tagline">{tagline}</p>
   <div class="card glass-sheen">{body_html}</div>
@@ -1144,6 +1150,7 @@ function renderCompleted(data) {
     <div class="actions">
       <a class="btn" href="/report/${jobId}" target="_blank">View full report</a>
       <a class="btn ghost" href="/report/${jobId}?download=1">Download HTML</a>
+      <a class="btn ghost" href="/feedback?job=${jobId}">Leave feedback</a>
       <a class="btn ghost" href="/">Scan another site</a>
     </div>
     <p style="margin:16px 0 0;font-size:12.5px;line-height:1.6;color:var(--muted)">If this
@@ -1488,8 +1495,7 @@ async def faq_page() -> str:
             <ul style="margin:8px 0 0;padding-left:20px;line-height:1.9">
               <li><a href="https://github.com/pandayv/mad-platform-community" target="_blank" rel="noopener">Contribute</a>
               to the project on GitHub.</li>
-              <li><a href="mailto:hello@mad-platform.org">Provide a testimonial or feedback</a>,
-              even a sentence.</li>
+              <li><a href="/feedback">Leave feedback</a>, even a sentence, testimonial or not.</li>
               <li>Spread the word: share it with friends, family, and on social media.</li>
               <li><a href="https://buymeacoffee.com/madplatform" target="_blank" rel="noopener">Donate</a>
               to help cover infrastructure costs.</li>
@@ -1771,48 +1777,154 @@ _MAX_FEEDBACK_COMMENT = 2000
 _MAX_FEEDBACK_CONTACT = 254  # RFC 5321's maximum email address length
 
 
-@app.post("/report/{job_id}/feedback")
+_STAR_SVG = (
+    '<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M12 2.5l2.9 6.3 6.9.7-5.2 4.7 1.5 6.8L12 17.4l-6.1 3.6 1.5-6.8L2.2 9.5l6.9-.7L12 2.5z"/></svg>'
+)
+
+
+def _render_feedback_page(
+    job_id: str = "", url: str = "", rating: str = "", comment: str = "",
+    allow_testimonial: bool = False, contact: str = "", error: str | None = None,
+) -> str:
+    """One form, reachable from four places (the FAQ, the completed-scan
+    view, the stored report, and the report email) rather than four
+    slightly-different implementations -- open to anyone, not gated behind
+    a scan's review token. The token gate F5 (CODE_REVIEW_FINDINGS.md)
+    added was fixing unbounded writes and a caller-controlled publish
+    flag, not "no proof you scanned something"; reusing a hard-to-guess
+    job_id as a loose reference when one exists costs nothing and needs no
+    token to be safe (see check_and_reserve_feedback_quota for what
+    actually bounds abuse here).
+
+    Every visible field argument doubles as the re-fill value on a
+    validation error -- nothing typed should vanish because one field
+    didn't pass a length check.
+
+    Stars, not numbered buttons: the earlier version used a plain 1-5
+    button row, which was correct but generic -- a star scale is the more
+    immediately legible convention for "rate this." Built radios-in-labels,
+    reverse-ordered in the DOM and un-reversed with flex-direction so a
+    pure-CSS ~ sibling selector can light up "this star and everything
+    before it" on hover or selection -- no JS needed to submit or to see
+    the current rating, only to drive the live character count below.
+    """
+    checked = {str(n): (" checked" if str(n) == rating else "") for n in range(1, 6)}
+    stars = "".join(
+        f'<input type="radio" id="star{n}" name="rating" value="{n}"{checked[str(n)]} required>'
+        f'<label for="star{n}"><span class="sr-only">{n} star{"s" if n != 1 else ""}</span>{_STAR_SVG}</label>'
+        for n in range(5, 0, -1)
+    )
+    checked_attr = " checked" if allow_testimonial else ""
+    body = f"""
+      <form method="post" action="/feedback">
+        <input type="hidden" name="job_id" value="{html.escape(job_id)}">
+        <div class="scan-field">
+          <label class="f-label" for="feedback-url">Which site is this about? (optional)</label>
+          <input id="feedback-url" type="text" name="url" placeholder="yoursite.com" value="{html.escape(url)}">
+        </div>
+        <fieldset class="rating-field">
+          <legend class="f-label">How helpful was this?</legend>
+          <div class="star-rating">{stars}</div>
+        </fieldset>
+        <div class="scan-field">
+          <div style="display:flex;justify-content:space-between;align-items:baseline">
+            <label class="f-label" for="comment" style="margin-bottom:0">Comments (optional)</label>
+            <span id="comment-count" class="mono" style="font-size:11px;color:var(--muted)">0 / {_MAX_FEEDBACK_COMMENT}</span>
+          </div>
+          <textarea id="comment" name="comment" rows="7" maxlength="{_MAX_FEEDBACK_COMMENT}" placeholder="What worked, what didn't, anything we should fix" style="margin-top:6px">{html.escape(comment)}</textarea>
+        </div>
+        <label class="feedback-checkbox">
+          <input type="checkbox" name="allow_testimonial" value="true"{checked_attr}>
+          OK to quote this publicly as a testimonial
+        </label>
+        <div class="scan-field">
+          <label class="f-label" for="contact">Name or contact, if we can quote you (optional)</label>
+          <input id="contact" type="text" name="contact" maxlength="{_MAX_FEEDBACK_CONTACT}" placeholder="e.g. Jordan, owner of a small business" value="{html.escape(contact)}">
+        </div>
+        <input type="text" name="website" tabindex="-1" autocomplete="off" aria-hidden="true" style="position:absolute;left:-9999px;width:1px;height:1px;opacity:0">
+        <input type="hidden" name="form_ts" value="{int(time.time())}">
+        <button type="submit" class="scan-submit">Send feedback</button>
+      </form>
+      <script>
+      (function(){{
+        var box = document.getElementById("comment"), count = document.getElementById("comment-count");
+        if (!box || !count) return;
+        function update(){{ count.textContent = box.value.length + " / {_MAX_FEEDBACK_COMMENT}"; }}
+        box.addEventListener("input", update);
+        update();
+      }})();
+      </script>
+    """
+    return _verification_page(
+        "Feedback", "Tell us how it went, good or bad. It helps.", body, error, max_width=640
+    )
+
+
+@app.get("/feedback", response_class=HTMLResponse)
+async def feedback_page(job: str = "") -> str:
+    url = ""
+    if job:
+        existing = fs.get_job(job)
+        if existing:
+            url = existing.get("url", "")
+    return _render_feedback_page(job_id=job, url=url)
+
+
+@app.get("/feedback/thanks", response_class=HTMLResponse)
+async def feedback_thanks_page() -> str:
+    return _verification_page(
+        "Thanks",
+        "Feedback received.",
+        '<p style="margin:0">Genuinely appreciated, whether the news was good or not.'
+        ' <a href="/">Back to the homepage</a>.</p>',
+    )
+
+
+@app.post("/feedback")
 async def submit_feedback(
-    job_id: str,
-    token: str = Form(...),
+    request: Request,
+    job_id: str = Form(""),
+    url: str = Form(""),
     rating: int = Form(...),
     comment: str = Form(""),
     allow_testimonial: bool = Form(False),
-    contact: str = Form("")
-) -> JSONResponse:
-    """The immediate "was this helpful" prompt shown on the report page and
-    in the report email -- asking at the moment the report is delivered
-    gets meaningfully better response rates than a delayed follow-up.
+    contact: str = Form(""),
+    website: str = Form(""),
+    form_ts: str = Form(""),
+) -> Response:
+    """See _render_feedback_page for why this has no token gate. What
+    actually bounds abuse on an open endpoint: the same honeypot/timing
+    check every other form on the site uses, a dedicated per-IP daily
+    quota (check_and_reserve_feedback_quota -- separate from the scan
+    quota, since feedback shouldn't compete with it and costs nothing like
+    a scan does), and the same bounds checks the token-gated version had
+    (rating range, comment/contact length).
 
-    Authorized by the job's own review_token, the same capability that
-    already scopes /review/link/... to one scan's owner. This route
-    previously required only that the job exist, so anyone holding any
-    valid job ID could write unlimited Firestore documents with arbitrary
-    content, and `allow_testimonial` is caller-controlled -- so an attacker
-    could mark their own text publishable (app.py's privacy page says
-    testimonial-flagged feedback may be published). Firestore writes are
-    also billed.
-
-    Three further limits, none of which existed: `rating` was coerced to
-    int but never bounds-checked (a stored 2**40 skews anything that reads
-    it), `comment`/`contact` had no length cap, and one job could be
-    submitted against repeatedly.
+    Every rejection re-renders with everything the visitor already typed
+    -- a validation error should never mean starting over.
     """
-    if not fs.verify_review_token(job_id, token):
-        # Same 404 for a missing job and a wrong token -- matching
-        # _scoped_escalation_or_404, so a guessed token cannot be used to
-        # confirm that a job ID is real.
-        raise HTTPException(404, "Not found")
+    def _redisplay(error: str) -> str:
+        return _render_feedback_page(
+            job_id, url, str(rating), comment, allow_testimonial, contact, error=error
+        )
+
+    if _honeypot_or_timing_error(website, form_ts):
+        return HTMLResponse(_redisplay("Something went wrong. Please try again."), status_code=400)
     if not _MIN_RATING <= rating <= _MAX_RATING:
-        raise HTTPException(422, f"rating must be between {_MIN_RATING} and {_MAX_RATING}")
-    if len(comment) > _MAX_FEEDBACK_COMMENT or len(contact) > _MAX_FEEDBACK_CONTACT:
-        raise HTTPException(422, "Feedback is too long")
-    if fs.has_feedback(job_id):
-        # Idempotent rather than an error: a double-submit from an impatient
-        # click should look like success to the person clicking.
-        return JSONResponse({"ok": True, "already_submitted": True})
-    fs.save_feedback(job_id, rating=rating, comment=comment, allow_testimonial=allow_testimonial, contact=contact or None)
-    return JSONResponse({"ok": True})
+        return HTMLResponse(
+            _redisplay(f"Please choose a rating between {_MIN_RATING} and {_MAX_RATING}."), status_code=422
+        )
+    if len(comment) > _MAX_FEEDBACK_COMMENT or len(contact) > _MAX_FEEDBACK_CONTACT or len(url) > 2048:
+        return HTMLResponse(_redisplay("That's a bit long -- please trim it and try again."), status_code=422)
+    client_ip = request.client.host if request.client else "unknown"
+    allowed, reason = fs.check_and_reserve_feedback_quota(client_ip)
+    if not allowed:
+        return HTMLResponse(_redisplay(reason), status_code=429)
+    fs.save_feedback(
+        job_id or None, rating=rating, comment=comment, allow_testimonial=allow_testimonial,
+        contact=contact or None, url=url.strip() or None,
+    )
+    return RedirectResponse("/feedback/thanks", status_code=303)
 
 
 @app.get("/api/escalation/{escalation_id}/status")
@@ -1916,7 +2028,59 @@ def _render_review_list(pending: list[dict]) -> str:
 <main id="main" class="page wide">
   <div class="brand">{theme.BRAND_MARK}MAD Platform</div>
   <h1>Internal review queue</h1>
-  <div class="tagline">{len(pending)} item(s) awaiting disposition.</div>
+  <div class="tagline">{len(pending)} item(s) awaiting disposition. &middot; <a href="/review/feedback">Feedback</a></div>
+  <div class="card glass-sheen">{items_html}</div>
+</main>
+</body>
+</html>"""
+
+
+def _feedback_row(f: dict) -> str:
+    created = f.get("created_at")
+    when = created.strftime("%Y-%m-%d %H:%M UTC") if hasattr(created, "strftime") else "-"
+    comment = html.escape(str(f.get("comment") or "").strip()) or '<span class="mono" style="color:var(--muted)">(none)</span>'
+    contact = html.escape(str(f.get("contact") or "").strip())
+    site = html.escape(str(f.get("url") or "").strip())
+    job_id = f.get("job_id")
+    scan_cell = f'<a href="/report/{job_id}" target="_blank">report</a>' if job_id else '<span style="color:var(--muted)">-</span>'
+    testimonial_cell = (
+        '<span class="badge sev-low">OK to quote</span>' if f.get("allow_testimonial") else ""
+    )
+    return f"""<tr>
+      <td class="mono" style="white-space:nowrap">{when}</td>
+      <td><b>{f.get('rating', '-')}</b>/5</td>
+      <td>{site or '<span style="color:var(--muted)">-</span>'}</td>
+      <td style="max-width:320px">{comment}</td>
+      <td>{testimonial_cell}</td>
+      <td>{contact or '<span style="color:var(--muted)">-</span>'}</td>
+      <td>{scan_cell}</td>
+    </tr>"""
+
+
+def _render_feedback_list(items: list[dict]) -> str:
+    if not items:
+        items_html = '<div class="tagline" style="margin:0">No feedback yet.</div>'
+    else:
+        rows = "".join(_feedback_row(f) for f in items)
+        items_html = (
+            '<table class="q-list"><thead><tr><th>When</th><th>Rating</th><th>Site</th><th>Comment</th>'
+            f'<th>Testimonial</th><th>Contact</th><th>Scan</th></tr></thead><tbody>{rows}</tbody></table>'
+        )
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Feedback | MAD Platform</title>
+{theme.FONT_LINK}
+{_BASE_STYLE_LINK}
+</head>
+<body>
+{_SKIP_LINK}
+<main id="main" class="page wide">
+  <div class="brand">{theme.BRAND_MARK}MAD Platform</div>
+  <h1>Feedback</h1>
+  <div class="tagline">{len(items)} most recent submission(s), newest first. &middot; <a href="/review">Review queue</a></div>
   <div class="card glass-sheen">{items_html}</div>
 </main>
 </body>
@@ -2000,6 +2164,17 @@ async def review_list(request: Request) -> Response:
     if not _is_reviewer(request):
         return HTMLResponse(_render_review_login())
     return HTMLResponse(_render_review_list(fs.list_pending_escalations()))
+
+
+@app.get("/review/feedback", response_class=HTMLResponse)
+async def review_feedback_list(request: Request) -> Response:
+    """Same gate as the rest of /review -- feedback includes free-text
+    contact info and unpublished comments, not something to leave open
+    just because it has no disposition to protect the way escalations do.
+    """
+    if not _is_reviewer(request):
+        return HTMLResponse(_render_review_login())
+    return HTMLResponse(_render_feedback_list(fs.list_feedback()))
 
 
 @app.post("/review/login")

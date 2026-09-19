@@ -9,6 +9,8 @@ is a deployment concern already covered by tests/test_config.py.
 
 from __future__ import annotations
 
+import time
+
 import httpx
 import pytest
 from fastapi.testclient import TestClient
@@ -255,42 +257,65 @@ async def test_a_successful_enqueue_does_not_refund(monkeypatch, start_scan_harn
     assert start_scan_harness["refunded"] == []
 
 
-# --- F5: the feedback endpoint ---------------------------------------------
+# --- F5: the feedback form (now open, not token-gated -- see app.py's
+# _render_feedback_page/submit_feedback docstrings for why removing the
+# token isn't a regression of the F5 fix) -----------------------------------
 
 
 @pytest.fixture
 def feedback_harness(monkeypatch):
     saved = []
-    monkeypatch.setattr(fs, "verify_review_token", lambda job_id, token: token == "good-token")
-    monkeypatch.setattr(fs, "has_feedback", lambda _j: False)
+    monkeypatch.setattr(fs, "check_and_reserve_feedback_quota", lambda ip: (True, ""))
     monkeypatch.setattr(fs, "save_feedback", lambda *a, **k: saved.append((a, k)))
+    monkeypatch.setattr(fs, "get_job", lambda _j: None)
     return saved
 
 
 def _post(client, **fields):
-    data = {"token": "good-token", "rating": 5}
+    data = {"rating": 5, "form_ts": time.time() - 10, "website": ""}
     data.update(fields)
-    return client.post("/report/job-1/feedback", data=data)
+    return client.post("/feedback", data=data, follow_redirects=False)
 
 
-def test_feedback_requires_the_jobs_own_review_token(client, feedback_harness):
-    """Any valid job ID used to be enough, so one leaked ID was an
-    unlimited Firestore write channel -- and allow_testimonial is
-    caller-controlled, so an attacker could mark their own text
-    publishable.
+def test_a_real_looking_submission_is_accepted(client, feedback_harness):
+    resp = _post(client, job_id="job-1")
+    assert resp.status_code == 303
+    assert resp.headers["location"] == "/feedback/thanks"
+    assert len(feedback_harness) == 1
+
+
+def test_the_submitted_url_is_stored_independent_of_job_id(client, feedback_harness):
+    """The URL field is editable, not just a display of the linked job's
+    own URL -- what the visitor actually typed is what gets stored.
     """
-    assert _post(client, token="wrong").status_code == 404
+    _post(client, job_id="job-1", url="https://a-different-site.example")
+    (_args, kwargs) = feedback_harness[0]
+    assert kwargs["url"] == "https://a-different-site.example"
+
+
+def test_feedback_needs_no_job_id_at_all(client, feedback_harness):
+    """The FAQ links here with no scan behind it -- job_id must be
+    genuinely optional, not just tolerant of an empty string.
+    """
+    resp = _post(client, job_id="")
+    assert resp.status_code == 303
+    (args, kwargs) = feedback_harness[0]
+    assert args[0] is None or kwargs.get("job_id") is None
+
+
+def test_the_honeypot_field_silently_rejects(client, feedback_harness):
+    """A filled decoy field, not a visible error -- same contract as every
+    other form in the scan funnel (_honeypot_or_timing_error).
+    """
+    resp = _post(client, website="I am a bot")
+    assert resp.status_code == 400
     assert feedback_harness == []
 
 
-def test_a_wrong_token_looks_the_same_as_a_missing_job(client, feedback_harness):
-    """A guessed token must not confirm that a job ID is real."""
-    assert _post(client, token="wrong").status_code == 404
-
-
-def test_a_valid_token_is_accepted(client, feedback_harness):
-    assert _post(client).status_code == 200
-    assert len(feedback_harness) == 1
+def test_a_too_fast_submission_is_rejected(client, feedback_harness):
+    resp = _post(client, form_ts=time.time())
+    assert resp.status_code == 400
+    assert feedback_harness == []
 
 
 @pytest.mark.parametrize("rating", [0, -1, -999999, 6, 2**40])
@@ -301,7 +326,7 @@ def test_out_of_range_ratings_are_rejected(client, feedback_harness, rating):
 
 @pytest.mark.parametrize("rating", [1, 2, 3, 4, 5])
 def test_every_in_range_rating_is_accepted(client, feedback_harness, rating):
-    assert _post(client, rating=rating).status_code == 200
+    assert _post(client, rating=rating).status_code == 303
 
 
 def test_an_oversized_comment_is_rejected(client, feedback_harness):
@@ -311,12 +336,32 @@ def test_an_oversized_comment_is_rejected(client, feedback_harness):
 
 def test_an_oversized_contact_is_rejected(client, feedback_harness):
     assert _post(client, contact="x" * 500).status_code == 422
-
-
-def test_a_second_submission_for_the_same_job_is_a_no_op(client, feedback_harness, monkeypatch):
-    monkeypatch.setattr(fs, "has_feedback", lambda _j: True)
-    resp = _post(client)
-    # Idempotent, not an error: a double-click should look like success.
-    assert resp.status_code == 200
-    assert resp.json()["already_submitted"] is True
     assert feedback_harness == []
+
+
+def test_the_per_ip_feedback_quota_is_enforced(client, feedback_harness, monkeypatch):
+    monkeypatch.setattr(fs, "check_and_reserve_feedback_quota", lambda ip: (False, "You've reached today's feedback limit. Please try again tomorrow."))
+    resp = _post(client)
+    assert resp.status_code == 429
+    assert feedback_harness == []
+
+
+def test_the_feedback_page_loads_with_no_job_context(client):
+    resp = client.get("/feedback")
+    assert resp.status_code == 200
+    assert "rating" in resp.text
+
+
+def test_the_feedback_page_shows_the_scans_url_when_a_real_job_is_given(client, monkeypatch):
+    monkeypatch.setattr(fs, "get_job", lambda _j: {"url": "https://example.com"})
+    resp = client.get("/feedback?job=job-1")
+    assert "example.com" in resp.text
+
+
+def test_an_unknown_job_in_the_query_string_degrades_to_the_plain_form(client, monkeypatch):
+    """A stale or tampered job param must not error the page -- it just
+    stops showing scan-specific context.
+    """
+    monkeypatch.setattr(fs, "get_job", lambda _j: None)
+    resp = client.get("/feedback?job=does-not-exist")
+    assert resp.status_code == 200

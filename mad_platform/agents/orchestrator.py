@@ -508,6 +508,7 @@ async def run_one_time_scan(
                 exec_summary,
                 report_url=f"{app_base_url}/report/{job_id}",
                 csv_url=f"{app_base_url}/report/{job_id}/tickets.csv",
+                job_id=job_id,
             )
             # Reuses the CSV already exported into the summary above rather
             # than calling sink.export() a second time -- one export, one
