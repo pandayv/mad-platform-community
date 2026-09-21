@@ -1951,7 +1951,7 @@ async def faq_page() -> str:
 
           <li><h3>How can I support this project?</h3>
             <p>You can support the project and the community in one or more ways:</p>
-            <ul style="margin:8px 0 0;padding-left:20px;line-height:1.9">
+            <ul style="margin:8px 0 0;padding-left:20px;font-size:14px;color:var(--ink-soft);line-height:1.6">
               <li><a href="https://github.com/pandayv/mad-platform-community" target="_blank" rel="noopener">Contribute</a>
               to the project on GitHub.</li>
               <li><a href="/feedback">Leave feedback</a>, even a sentence, testimonial or not.</li>
