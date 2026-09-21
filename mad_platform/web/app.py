@@ -654,7 +654,7 @@ def _site_footer() -> str:
         '<line x1="10" y1="2" x2="10" y2="4"/><line x1="14" y1="2" x2="14" y2="4"/></svg>Support the project</a>'
     )
     return f"""<footer class="site-footer"><div class="site-footer-inner">
-  <span>MAD Platform &middot; built during Google's All Things Agentic Hackathon, now free to use</span>
+  <span>MAD Platform &middot; Community Edition, free to use</span>
   <nav>{links}</nav>
 </div></footer>"""
 
@@ -1939,10 +1939,10 @@ async def faq_page() -> str:
         <ol class="trust-list" style="counter-reset: trust-item 9">
           <li><h3>Who's actually behind this?</h3>
             <p>An independent, open-source project, not a company; built and maintained in the
-            open by one person. The code running this exact site is public:
-            <a href="https://github.com/pandayv/mad-platform-community" target="_blank" rel="noopener">github.com/pandayv/mad-platform-community</a>.
-            That's not a marketing claim. You can read exactly what it does with your URL and
-            your email before you ever submit either, line by line.</p></li>
+            open. Originally built for Google's All Things Agentic Hackathon and now modified as
+            a free community tool. The code running this exact site is public:
+            <a href="https://github.com/pandayv/mad-platform-community" target="_blank" rel="noopener">github.com/pandayv/mad-platform-community</a>,
+            so you can read exactly what it does line by line.</p></li>
 
           <li><h3>How do I actually reach someone?</h3>
             <p>Email <a href="mailto:hello@mad-platform.org">hello@mad-platform.org</a>: questions,
