@@ -42,8 +42,8 @@ is the ongoing community fork: modified from a managed platform to a self-servin
 3. On the completed report, every confirmed finding is listed with a
    suggested fix and a status. Anything flagged "Awaiting internal
    review" is a low-confidence or critical finding a human needs to manually review. 
-4. The report of confirmed findings get emailed to your email address. A CSV report is also provided in Jira's importer column
-   format, so you can use into a real ticket tracker (Jira or similar) if your team has one. 
+4. The report of confirmed findings gets emailed to your email address. A CSV report is also provided in Jira's importer column
+   format, so you can drop it into a real ticket tracker (Jira or similar) if your team has one. 
 
 ## What it does
 
