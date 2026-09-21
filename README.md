@@ -32,6 +32,9 @@ is the ongoing community fork: modified from a managed platform to a self-servin
 
 **[mad-platform.org](https://mad-platform.org)** — Learn more or try it directly here. Paste in a URL, and watch it scan, and send a valuable report with findings to your email. 
 
+**[Architecture diagram](https://pandayv.github.io/mad-platform-community/):**
+the full pipeline and the Google Cloud infrastructure behind it.
+
 ### What to expect
 
 1. Submit your website or a specific page URL on the website above.
