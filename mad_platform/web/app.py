@@ -875,7 +875,7 @@ def _render_form(error: str | None = None, device_verified: bool = False) -> str
   <div class="section-head">
     <div class="section-eyebrow"><span class="line"></span><span>The engine</span><span class="line"></span></div>
     <h2>Under the hood</h2>
-    <p>Four specialized agents, not one model guessing.</p>
+    <p>A team of specialized agents, not one model guessing.</p>
   </div>
   <div class="pipeline-flow">
     <div class="pipeline-stage">
@@ -1861,13 +1861,16 @@ async def faq_page() -> str:
         <h2 class="trust-section-label">What this is</h2>
         <ol class="trust-list">
           <li><h3>What does this tool actually do?</h3>
-            <p>It scans the pages on your site that carry the most real risk, checks them with
-            both rule-based and AI-assisted review, independently confirms every finding before
-            it's ever shown to you, and gives you a concrete fix for each one, plus a
-            downloadable checklist you can hand straight to whoever fixes your
-            site. "MAD" is short for Multi-Agent Defense Platform: one agent decides what to
-            check, one finds issues, one independently confirms them, one takes action. Not a
-            single model skimming your site once and guessing.</p></li>
+            <p>It scans the pages on your site that carry the most real risk and checks each one
+            three ways: rule-based scanning, an AI visual pass, and an AI semantic review grounded
+            in the actual WCAG standard, not just what a model remembers. Every finding is
+            independently confirmed before it's ever shown to you, then ranked so you see what
+            matters most first, with a concrete fix for each one and a downloadable checklist you
+            can hand straight to whoever fixes your site. "MAD" is short for Multi-Agent Defense.
+            Five agents split the work: one decides what to check, one finds issues three
+            different ways, one independently confirms them, one ranks and writes up the
+            findings, one takes action. Not a single model skimming your site once and
+            guessing.</p></li>
 
           <li><h3>What doesn't it do?</h3>
             <p>It won't replace a full legal audit or genuine assistive-technology testing by a
