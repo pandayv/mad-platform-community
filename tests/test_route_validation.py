@@ -202,7 +202,7 @@ def test_a_report_with_a_live_job_record_is_still_served(client, monkeypatch):
 
 
 def test_the_retention_window_is_one_constant_shared_with_the_deploy_steps():
-    """365 appears in firestore_client, in README step 3's lifecycle rule
+    """365 appears in firestore_client, in SETUP.md step 3's lifecycle rule
     and in setup.sh. The constant is the one the code actually uses; this
     checks the deploy scripts still agree with it.
     """
@@ -211,7 +211,7 @@ def test_the_retention_window_is_one_constant_shared_with_the_deploy_steps():
 
     root = pathlib.Path(app_module.__file__).parents[2]
     days = fs.SCAN_RECORD_RETENTION_DAYS
-    for name in ("setup.sh", "README.md"):
+    for name in ("setup.sh", "SETUP.md"):
         text = (root / name).read_text()
         rule = re.search(r'"age":\s*(\d+),\s*"matchesPrefix":\s*\["reports/"\]', text)
         assert rule, f"{name} no longer configures a reports/ lifecycle rule"
