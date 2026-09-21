@@ -1971,6 +1971,14 @@ async def faq_page() -> str:
     )
 
 
+def _loggable(value: str, limit: int = 200) -> str:
+    """Diagnostic form of visitor-typed text for a rejection log line: query
+    string and fragment dropped (either can carry a token), length capped.
+    Always logged with %r so newlines can't forge extra log lines.
+    """
+    return value.strip().split("?", 1)[0].split("#", 1)[0][:limit]
+
+
 def _honeypot_or_timing_error(website: str, form_ts: str) -> bool:
     """True if this submission trips the honeypot or the minimum-fill-time
     check -- shared by every form in the URL -> email -> code funnel, since
@@ -1978,11 +1986,17 @@ def _honeypot_or_timing_error(website: str, form_ts: str) -> bool:
     page before it.
     """
     if website.strip():
+        logger.warning("scan_rejected reason=honeypot_filled value=%r", _loggable(website, 80))
         return True
     try:
-        return time.time() - float(form_ts) < abuse_guard.MIN_FORM_FILL_SECONDS
+        elapsed = time.time() - float(form_ts)
     except ValueError:
+        logger.warning("scan_rejected reason=bad_form_ts value=%r", _loggable(form_ts, 40))
         return True
+    if elapsed < abuse_guard.MIN_FORM_FILL_SECONDS:
+        logger.warning("scan_rejected reason=submitted_too_fast elapsed=%.2fs", elapsed)
+        return True
+    return False
 
 
 async def _safe_url_or_error(url: str) -> tuple[str | None, str | None]:
@@ -2011,12 +2025,14 @@ async def _safe_url_or_error(url: str) -> tuple[str | None, str | None]:
     parsed apart and reconstructed -- so a path/query/fragment
     ("cahm.org/about/team?x=1#y") survives exactly as typed either way.
     """
+    typed = url
     url = url.strip()
     if url and "://" not in url:
         url = f"https://{url}"
     elif url:
         scheme = urlsplit(url).scheme.lower()
         if scheme not in ("http", "https"):
+            logger.warning("scan_rejected reason=bad_scheme typed=%r", _loggable(typed))
             return None, "Please enter an http:// or https:// website URL."
     try:
         # assert_safe_target_async, not asyncio.to_thread: the blocking
@@ -2028,9 +2044,13 @@ async def _safe_url_or_error(url: str) -> tuple[str | None, str | None]:
         # pool in url_safety bounds that; the timeout below is still what
         # gives this visitor an answer. See url_safety's own comment.
         await url_safety.assert_safe_target_async(url, timeout=3.0)
-    except UnsafeTargetError:
+    except UnsafeTargetError as exc:
+        logger.warning(
+            "scan_rejected reason=unreachable_or_unsafe typed=%r detail=%r", _loggable(typed), _loggable(str(exc), 160)
+        )
         return None, "Please enter a public website URL we can actually reach."
     except asyncio.TimeoutError:
+        logger.warning("scan_rejected reason=dns_timeout typed=%r", _loggable(typed))
         return None, "We couldn't verify that URL in time. Please double-check it and try again."
     return url, None
 
