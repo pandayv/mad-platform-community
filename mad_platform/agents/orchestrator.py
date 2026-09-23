@@ -366,7 +366,11 @@ def build_scan_summary(
 
 
 async def run_one_time_scan(
-    url: str, job_id: str | None = None, issue_sink: IssueSink | None = None, owner_contact: str | None = None
+    url: str,
+    job_id: str | None = None,
+    issue_sink: IssueSink | None = None,
+    owner_contact: str | None = None,
+    is_final_attempt: bool = True,
 ) -> ScanResult:
     """The full core, end to end: site -> findings -> recommendations ->
     report -> escalation. Pass an existing job_id to resume it -- pages
@@ -375,6 +379,13 @@ async def run_one_time_scan(
     without real ticketing credentials configured. owner_contact is the
     submitter's email (required by the community fork's /scan route) --
     only used on a fresh job; a resumed job already has its own.
+
+    is_final_attempt: whether Cloud Tasks has no retries left after this
+    one. True by default for every non-worker caller (run_scan.py, the
+    WCAG poller doesn't call this at all), which always means "there is
+    no retry coming, so a failure here is the real, final failure."
+    scan-worker's /run is the one caller that ever passes False -- see
+    its own comment for why a mid-retry failure must not reach fail_job.
     """
     issue_sink = issue_sink or MockIssueSink()
     existing_job = fs.get_job(job_id) if job_id else None
@@ -573,6 +584,17 @@ async def run_one_time_scan(
             # Tasks and the logs see the real failure.
             if (fs.get_job(job_id) or {}).get("status") == "completed":
                 logger.exception("[%s] Scan completed, but post-completion notification failed", job_id)
+            elif not is_final_attempt:
+                # A transient failure (a Gemini 500, a DNS blip) with a
+                # Cloud Tasks retry still coming. status stays whatever
+                # mark_job_started() left it at ("in_progress"), so the
+                # status page keeps calmly polling/spinning instead of
+                # landing on renderFailed's terminal "Scan failed" screen
+                # for a scan that is about to succeed on retry -- exactly
+                # what happened to a real visitor at launch: the retry
+                # completed and emailed the report less than a minute
+                # after this branch would have told them it failed.
+                logger.exception("[%s] Scan attempt failed, retry expected -- not marking failed", job_id)
             else:
                 # An operator-facing message, not str(exc). The `error`
                 # field is returned verbatim by GET /api/status/{job_id}

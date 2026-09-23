@@ -18,7 +18,7 @@ import uuid
 
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from pydantic import BaseModel
 
 from mad_platform import config
@@ -50,14 +50,30 @@ class RunRequest(BaseModel):
     job_id: str
 
 
+# Must match scan-queue's own --max-attempts (setup.sh / SETUP.md step 7);
+# test_route_validation.py checks the two stay in sync the same way it
+# already does for the retention-window constant. Cloud Tasks' retry-count
+# header is 0 on the first delivery, so the last allowed delivery is
+# max_attempts - 1.
+SCAN_QUEUE_MAX_ATTEMPTS = 3
+
+
 @app.get("/")
 async def health() -> dict:
     return {"status": "ok"}
 
 
 @app.post("/run")
-async def run_scan(req: RunRequest) -> dict:
+async def run_scan(req: RunRequest, request: Request) -> dict:
     job_id = req.job_id
+    # Missing/unparseable outside real Cloud Tasks delivery -- treated as
+    # "no retry coming," the safe default that matches every caller other
+    # than the real queue (tests use fake_request(), see conftest.py).
+    try:
+        retry_count = int(request.headers.get("X-CloudTasks-TaskRetryCount", "0"))
+    except ValueError:
+        retry_count = SCAN_QUEUE_MAX_ATTEMPTS - 1
+    is_final_attempt = retry_count >= SCAN_QUEUE_MAX_ATTEMPTS - 1
     job = fs.get_job(job_id)
     if job is None:
         # No such job: retrying this dispatch can never succeed, so
@@ -108,15 +124,21 @@ async def run_scan(req: RunRequest) -> dict:
     sink = CsvIssueSink()
 
     try:
-        await run_one_time_scan(url, job_id=job_id, issue_sink=sink, owner_contact=job.get("owner_contact"))
+        await run_one_time_scan(
+            url,
+            job_id=job_id,
+            issue_sink=sink,
+            owner_contact=job.get("owner_contact"),
+            is_final_attempt=is_final_attempt,
+        )
     except Exception:
         # Let this propagate as a 500: unlike the old in-process
         # fire-and-forget task, Cloud Tasks needs the failure signal to
         # decide whether to retry (bounded by the queue's own
-        # max-attempts). run_one_time_scan already wrote status=failed to
-        # Firestore before re-raising; a retry resumes from the last
-        # completed checkpoint rather than starting over.
-        logger.exception("[%s] Scan failed (%s)", job_id, url)
+        # max-attempts). run_one_time_scan only wrote status=failed to
+        # Firestore if is_final_attempt was True; a retry resumes from the
+        # last completed checkpoint rather than starting over.
+        logger.exception("[%s] Scan failed (%s), retry_count=%d, final=%s", job_id, url, retry_count, is_final_attempt)
         raise
     finally:
         # Released either way, so a retry of a genuinely failed scan starts

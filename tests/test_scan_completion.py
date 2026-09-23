@@ -20,7 +20,9 @@ import inspect
 
 import pytest
 from google.cloud.firestore_v1 import transaction as firestore_transaction
+from starlette.requests import Request
 
+from mad_platform.agents import orchestrator
 from mad_platform.agents.orchestrator import build_scan_summary
 from mad_platform.agents.reporter import RankedFinding
 from mad_platform.state import firestore_client as fs
@@ -139,8 +141,18 @@ def test_summary_tolerates_no_sink_at_all():
 # --- the worker's retry short-circuit --------------------------------------
 
 
-async def _run(job_id: str = "job-1"):
-    return await worker_app.run_scan(worker_app.RunRequest(job_id=job_id))
+def _fake_request(retry_count: int | None = None) -> Request:
+    """A bare Starlette Request carrying only the one header run_scan
+    reads. retry_count=None omits it entirely, matching a real dispatch's
+    first delivery (Cloud Tasks sends the header from the first retry
+    onward, not on delivery zero).
+    """
+    headers = [] if retry_count is None else [(b"x-cloudtasks-taskretrycount", str(retry_count).encode())]
+    return Request(scope={"type": "http", "headers": headers})
+
+
+async def _run(job_id: str = "job-1", retry_count: int | None = None):
+    return await worker_app.run_scan(worker_app.RunRequest(job_id=job_id), _fake_request(retry_count))
 
 
 @pytest.fixture
@@ -255,6 +267,54 @@ async def test_the_lease_is_released_when_the_scan_fails(monkeypatch, granted_le
     with pytest.raises(RuntimeError):
         await _run("job-9")
     assert [job_id for job_id, _owner in granted_lease] == ["job-9"]
+
+
+# --- the launch-day bug: a mid-retry failure must not read as terminal ----
+
+
+async def test_a_mid_retry_failure_does_not_mark_the_job_failed(monkeypatch, granted_lease):
+    """The actual bug a real visitor hit at launch: a transient Gemini 500
+    during a scan Cloud Tasks still had retries left for flipped status to
+    "failed" -- the status page saw that, stopped polling, and showed
+    "Scan failed" permanently, while the retry (seconds later) completed
+    the scan and emailed the report anyway. Cloud Tasks' own retry-count
+    header is what tells the worker more attempts are coming.
+    """
+    monkeypatch.setattr(fs, "get_job", lambda _j: {"status": "queued", "url": "https://example.com/"})
+    monkeypatch.setattr(fs, "mark_job_started", lambda _j: None)
+
+    async def boom(_url):
+        raise RuntimeError("transient upstream error")
+
+    monkeypatch.setattr(orchestrator, "fetch_page", boom)
+    failed = []
+    monkeypatch.setattr(fs, "fail_job", lambda *a, **k: failed.append(a))
+
+    with pytest.raises(RuntimeError):
+        await _run("job-9", retry_count=0)  # first delivery -- two retries still allowed
+
+    assert failed == [], "a mid-retry failure must not mark the job failed for a visitor to see"
+
+
+async def test_the_last_allowed_attempt_does_mark_the_job_failed(monkeypatch, granted_lease):
+    """The other half of the same fix: once Cloud Tasks has no retries
+    left, a failure has to become the real, visible "Scan failed" -- not
+    silently vanish.
+    """
+    monkeypatch.setattr(fs, "get_job", lambda _j: {"status": "queued", "url": "https://example.com/"})
+    monkeypatch.setattr(fs, "mark_job_started", lambda _j: None)
+
+    async def boom(_url):
+        raise RuntimeError("transient upstream error")
+
+    monkeypatch.setattr(orchestrator, "fetch_page", boom)
+    failed = []
+    monkeypatch.setattr(fs, "fail_job", lambda *a, **k: failed.append(a))
+
+    with pytest.raises(RuntimeError):
+        await _run("job-9", retry_count=worker_app.SCAN_QUEUE_MAX_ATTEMPTS - 1)  # last allowed delivery
+
+    assert len(failed) == 1
 
 
 async def test_each_dispatch_claims_under_its_own_owner_id(monkeypatch):

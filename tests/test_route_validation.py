@@ -216,3 +216,27 @@ def test_the_retention_window_is_one_constant_shared_with_the_deploy_steps():
         rule = re.search(r'"age":\s*(\d+),\s*"matchesPrefix":\s*\["reports/"\]', text)
         assert rule, f"{name} no longer configures a reports/ lifecycle rule"
         assert int(rule.group(1)) == days, f"{name} says {rule.group(1)} days, the code says {days}"
+
+
+def test_the_queue_max_attempts_is_one_constant_shared_with_the_deploy_steps():
+    """worker_app.SCAN_QUEUE_MAX_ATTEMPTS decides whether a failed scan
+    attempt is the real, final "Scan failed" or a quiet one with a Cloud
+    Tasks retry still coming (see test_scan_completion.py). It has to
+    match --max-attempts on the actual scan-queue the deploy scripts
+    create, or that decision is just wrong in whichever direction the two
+    drift.
+    """
+    import pathlib
+    import re
+
+    from mad_platform.web import worker_app
+
+    root = pathlib.Path(app_module.__file__).parents[2]
+    attempts = worker_app.SCAN_QUEUE_MAX_ATTEMPTS
+    for name in ("setup.sh", "SETUP.md"):
+        text = (root / name).read_text()
+        match = re.search(r"--max-attempts=(\d+)", text)
+        assert match, f"{name} no longer sets scan-queue's --max-attempts"
+        assert int(match.group(1)) == attempts, (
+            f"{name} says --max-attempts={match.group(1)}, worker_app.py says {attempts}"
+        )

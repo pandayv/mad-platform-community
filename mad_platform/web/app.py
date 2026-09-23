@@ -84,6 +84,31 @@ async def _lifespan(_app: FastAPI):
 app = FastAPI(title="MAD Platform", lifespan=_lifespan)
 app.mount("/static", StaticFiles(directory=os.path.join(os.path.dirname(__file__), "static")), name="static")
 
+
+@app.exception_handler(Exception)
+async def _unhandled_exception(request: Request, exc: Exception) -> Response:
+    """The one backstop for a genuinely unexpected crash anywhere in this
+    service -- a bug in quota checking, a Firestore hiccup, anything not
+    already caught closer to where it happened. Without this, FastAPI's
+    own default is a bare '{"detail": "Internal Server Error"}' with none
+    of this site's styling, header, or footer: exactly the "ugly error"
+    a real visitor should never be the one to discover. The exception is
+    still logged in full below, so nothing about diagnosing it is lost --
+    only what the visitor sees changes.
+    """
+    logger.exception("Unhandled exception on %s %s", request.method, request.url.path)
+    return HTMLResponse(
+        _static_page(
+            "Something went wrong",
+            "<p>This is on our side, not yours. Please try again in a few minutes -- "
+            "if it keeps happening, <a href=\"mailto:hello@mad-platform.org\">let us know</a> "
+            "and we'll take a look.</p>"
+            '<p><a class="btn" href="/">Back to the homepage</a></p>',
+            path=request.url.path,
+        ),
+        status_code=500,
+    )
+
 # What /static/* is served with. See _security_headers below for why this
 # exists at all and why it is a day rather than a year.
 _STATIC_CACHE_CONTROL = "public, max-age=86400"
@@ -2034,6 +2059,17 @@ async def _safe_url_or_error(url: str) -> tuple[str | None, str | None]:
         if scheme not in ("http", "https"):
             logger.warning("scan_rejected reason=bad_scheme typed=%r", _loggable(typed))
             return None, "Please enter an http:// or https:// website URL."
+    if url and urlsplit(url).username:
+        # user@host syntax -- basic-auth URL syntax that no real visitor
+        # ever means to type. The far more common real cause: an email
+        # address ("name@example.com") landing in the URL field, which
+        # "://" not in url" above happily turns into a syntactically valid
+        # "https://name@example.com" that then burns a full 3-timeout
+        # crawl (45+s of worker time) before failing with a Playwright
+        # error no visitor should ever see. Caught here instead, for free,
+        # before a single network call.
+        logger.warning("scan_rejected reason=userinfo_in_url typed=%r", _loggable(typed))
+        return None, "That looks like an email address, not a website. Please enter your website's URL (e.g. https://example.com)."
     try:
         # assert_safe_target_async, not asyncio.to_thread: the blocking
         # getaddrinfo inside it cannot be cancelled, so an abandoned
