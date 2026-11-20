@@ -6,8 +6,8 @@
 #   .venv/bin/python -m pytest
 #
 # Exact pins, matching requirements.txt's convention.
-pytest==9.1.1
-pytest-asyncio==1.4.0
+pytest==9.2.0
+pytest-asyncio==1.4.1
 
 # S6: vulnerability scanning for requirements.txt. Exact pins with nothing
 # watching them are a snapshot, not a policy -- the packages that mattered
