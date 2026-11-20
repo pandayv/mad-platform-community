@@ -204,18 +204,24 @@ gcloud iam service-accounts add-iam-policy-binding "$SA_QUEUE_INVOKER" \
 
 gcloud builds submit --tag="${IMG_BASE}/scan-onboarding" --region="$REGION" .
 
+# --cpu-throttling (request-based billing): this service only renders pages
+# and enqueues Cloud Tasks, all inside the request, so it needs no CPU
+# between requests. Always-on CPU billed it for every second an instance
+# existed (~$1.75/day, kept warm by bot traffic). Keep it that way: any work
+# added here that runs after the response is sent will stall, so put such
+# work on scan-worker or behind Cloud Tasks instead.
 if gcloud run services describe scan-onboarding --region="$REGION" >/dev/null 2>&1; then
   gcloud run deploy scan-onboarding \
     --image="${IMG_BASE}/scan-onboarding:latest" \
     --region="$REGION" --service-account="$SA_ONBOARDING" \
-    --no-cpu-throttling --memory=1Gi --concurrency=20 --max-instances=3 --min-instances=0 \
+    --cpu-throttling --memory=1Gi --concurrency=20 --max-instances=3 --min-instances=0 \
     --update-env-vars=GCS_BUCKET_NAME="${GCS_BUCKET_NAME}",GOOGLE_CLOUD_PROJECT="${PROJECT_ID}",SCAN_WORKER_URL="${WORKER_URL}",SCAN_QUEUE_INVOKER_SA="${SA_QUEUE_INVOKER}" \
     --allow-unauthenticated
 else
   gcloud run deploy scan-onboarding \
     --image="${IMG_BASE}/scan-onboarding:latest" \
     --region="$REGION" --service-account="$SA_ONBOARDING" \
-    --no-cpu-throttling --memory=1Gi --concurrency=20 --max-instances=3 --min-instances=0 \
+    --cpu-throttling --memory=1Gi --concurrency=20 --max-instances=3 --min-instances=0 \
     --set-env-vars=GCS_BUCKET_NAME="${GCS_BUCKET_NAME}",GOOGLE_CLOUD_PROJECT="${PROJECT_ID}",MAD_APP_BASE_URL="https://placeholder.invalid",SCAN_WORKER_URL="${WORKER_URL}",SCAN_QUEUE_INVOKER_SA="${SA_QUEUE_INVOKER}" \
     --allow-unauthenticated
 fi

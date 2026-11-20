@@ -4,7 +4,7 @@ location='global' is required, not a specific region like 'us-central1':
 some models appear in a region's catalog listing but 404 when actually
 called there.
 
-gemini-3.5-flash-lite for high-volume calls, gemini-3.7-flash for the
+gemini-3.5-flash-lite for high-volume calls, gemini-3.8-flash for the
 handful of judgment calls. No Pro-tier model exists at the "Gemini 3.5+"
 floor this project targets, so the tiering is Flash-lite vs. Flash rather
 than the more typical Flash-vs-Pro split.
@@ -21,7 +21,11 @@ from mad_platform import config
 from mad_platform.tools import retry
 
 FLASH_LITE = "gemini-3.5-flash-lite"
-FLASH = "gemini-3.7-flash"
+# gemini-3.8-flash, not 3.7: 3.7 was a short-availability release that
+# retires 2027-01-28, and Google lists 3.8 as its replacement. 3.8 is GA
+# (supported until at least 2027-09-02). Check Vertex AI's model-versions
+# page for retirement dates before changing any of these.
+FLASH = "gemini-3.8-flash"
 EMBEDDING_MODEL = "gemini-embedding-001"
 
 # Every call has an explicit timeout and one bounded retry -- no call in

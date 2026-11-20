@@ -185,10 +185,16 @@ gcloud builds submit --tag="us-central1-docker.pkg.dev/${PROJECT_ID}/mad-platfor
 gcloud run deploy scan-onboarding \
   --image="us-central1-docker.pkg.dev/${PROJECT_ID}/mad-platform/scan-onboarding:latest" \
   --region=us-central1 --service-account="$SA_ONBOARDING" \
-  --no-cpu-throttling --memory=1Gi --concurrency=20 --max-instances=3 --min-instances=0 \
+  --cpu-throttling --memory=1Gi --concurrency=20 --max-instances=3 --min-instances=0 \
   --set-env-vars=GCS_BUCKET_NAME="${PROJECT_ID}-reports",GOOGLE_CLOUD_PROJECT="${PROJECT_ID}",MAD_APP_BASE_URL="https://YOUR-DOMAIN-OR-CLOUD-RUN-URL",SCAN_WORKER_URL="${WORKER_URL}",SCAN_QUEUE_INVOKER_SA="${SA_QUEUE_INVOKER}" \
   --allow-unauthenticated
 ```
+
+`--cpu-throttling` bills this service only while it is handling a request.
+It does all its work inside the request, so it doesn't need CPU in between.
+Without the flag, Cloud Run bills for every second an instance is up, and
+bot traffic alone keeps one up nearly all day. If you add work that runs
+after a response is sent, move it to scan-worker or Cloud Tasks instead.
 
 No review access code is required by default (`MAD_REVIEW_CODE` unset) —
 this deploys a fully public, free instance, matching the live one, and

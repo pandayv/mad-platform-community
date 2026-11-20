@@ -34,6 +34,7 @@ from urllib.parse import quote, urlsplit
 
 import hmac
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from functools import lru_cache
 from typing import Literal
 
@@ -1403,7 +1404,18 @@ function stageDot(stage) {
   return `<span class="stg-dot" style="background:${color}"></span>`;
 }
 
+// Every scan starts out "queued" until a worker picks it up, and a worker
+// starting from zero takes ~15s even when nobody else is scanning. So the
+// "waiting for a slot / safe to close this tab" message is only shown once
+// a scan has actually been waiting this long; before that it's just
+// starting. null (no created_at on an old job) counts as a real wait.
+const QUEUE_WAIT_NOTICE_SECS = 45;
+
 function renderQueued(data) {
+  if (data.queued_seconds != null && data.queued_seconds < QUEUE_WAIT_NOTICE_SECS) {
+    renderStarting(data);
+    return;
+  }
   document.getElementById("scan-beam").style.display = "none";
   document.getElementById("heading").textContent = "Queued: " + data.url;
   document.getElementById("tagline").textContent =
@@ -1413,6 +1425,14 @@ function renderQueued(data) {
     `<div class="tagline" style="margin:12px 0 0">No need to keep this tab open -- we'll email your full ` +
     `report to the address you submitted as soon as it's ready. This same link will always show the ` +
     `current status, so it's safe to close this and check back later.</div>`;
+}
+
+function renderStarting(data) {
+  document.getElementById("scan-beam").style.display = "block";
+  document.getElementById("heading").textContent = "Scanning " + data.url;
+  document.getElementById("tagline").textContent = DEFAULT_TAGLINE;
+  document.getElementById("content").innerHTML =
+    `<div style="display:flex;align-items:center;gap:10px"><span class="spinner"></span> Starting your scan...</div>`;
 }
 
 function renderInProgress(data) {
@@ -2275,11 +2295,22 @@ async def api_status(job_id: str) -> JSONResponse:
         raise HTTPException(404, "No such job")
     created_at = job.get("created_at")
     started_at = job.get("started_at")
+    status = job.get("status", "in_progress")
+    # How long this job has been waiting for a worker, measured on the
+    # server's clock rather than the visitor's (a skewed browser clock would
+    # otherwise decide which message they see). The status page uses it to
+    # tell a normal worker startup apart from a real wait behind other scans.
+    queued_seconds = (
+        max(0, int((datetime.now(timezone.utc) - created_at).total_seconds()))
+        if status == "queued" and created_at
+        else None
+    )
     return JSONResponse(
         {
             "job_id": job_id,
             "url": job["url"],
-            "status": job.get("status", "in_progress"),
+            "status": status,
+            "queued_seconds": queued_seconds,
             "phase": job.get("phase"),
             "error": job.get("error"),
             "pages": {url: {"stage": info.get("stage")} for url, info in job.get("pages", {}).items()},

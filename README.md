@@ -89,7 +89,7 @@ of findings with suggested fixes:
 ## Tech stack
 
 - **AI:** Gemini via Vertex AI for every call, real-time or batch
-  (`gemini-3.5-flash-lite` for high-volume calls, `gemini-3.7-flash` for
+  (`gemini-3.5-flash-lite` for high-volume calls, `gemini-3.8-flash` for
   judgment calls, `gemini-embedding-001` for retrieval)
 - **Agent framework:** Google Agent Development Kit (ADK)
 - **Compute:** Cloud Run, three scale-to-zero services split by trigger

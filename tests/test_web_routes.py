@@ -185,6 +185,41 @@ def test_the_status_page_has_no_unreplaced_placeholders(client, monkeypatch):
     assert "__" not in body.replace("__pycache__", "")
 
 
+# --- Queued vs. starting: only a real wait gets the "slot" message ----------
+
+
+def test_a_queued_job_reports_how_long_it_has_been_waiting(client, monkeypatch):
+    from datetime import datetime, timedelta, timezone
+
+    created = datetime.now(timezone.utc) - timedelta(seconds=20)
+    monkeypatch.setattr(
+        fs, "get_job", lambda _j: {"url": "https://example.com/", "status": "queued", "created_at": created}
+    )
+    data = client.get(f"/api/status/{JOB_ID}").json()
+    assert 19 <= data["queued_seconds"] <= 25
+
+
+def test_a_running_job_has_no_queued_seconds(client, monkeypatch):
+    from datetime import datetime, timezone
+
+    monkeypatch.setattr(
+        fs,
+        "get_job",
+        lambda _j: {"url": "https://example.com/", "status": "in_progress", "created_at": datetime.now(timezone.utc)},
+    )
+    assert client.get(f"/api/status/{JOB_ID}").json()["queued_seconds"] is None
+
+
+def test_the_status_page_only_shows_the_wait_message_after_a_real_wait(client, monkeypatch):
+    """A worker starting from zero leaves every scan "queued" for ~15s, so
+    the slot/close-this-tab copy must sit behind the threshold."""
+    monkeypatch.setattr(fs, "get_job", lambda _j: {"url": "https://example.com/"})
+    body = client.get(f"/status/{JOB_ID}").text
+    assert "QUEUE_WAIT_NOTICE_SECS = 45" in body
+    assert "data.queued_seconds < QUEUE_WAIT_NOTICE_SECS" in body
+    assert "Starting your scan..." in body
+
+
 # --- F2: Turnstile fails open on a non-JSON response ------------------------
 
 
